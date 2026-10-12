@@ -1,0 +1,14 @@
+IMPLANTATION AR - application Android installable
+
+1. Heberger ces fichiers (sans le LISEZ-MOI) en HTTPS, par exemple :
+   - GitHub Pages : creer un depot public, y envoyer TOUS les fichiers a la racine,
+     puis Settings > Pages > branche main > Save.
+   - ou Netlify Drop (app.netlify.com/drop) : glisser le dossier decompresse.
+2. Sur le telephone Android, ouvrir l'adresse dans Chrome, puis menu (trois points)
+   > "Installer l'application" (ou "Ajouter a l'ecran d'accueil").
+3. Lancer l'icone "Implantation" : plein ecran, sans barre d'adresse.
+   Apres la premiere ouverture, tout fonctionne sans connexion.
+4. Au premier lancement de la RA, autoriser la camera.
+
+Pour mettre a jour : remplacer les fichiers, puis changer 'implantation-ar-v1'
+en 'implantation-ar-v2' dans sw.js.
