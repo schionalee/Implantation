@@ -1,5 +1,5 @@
 // Mode hors connexion : tout est mis en cache à la première ouverture.
-const V = 'implantation-ar-v2';
+const V = 'implantation-ar-v3';
 const CORE = ['./', 'index.html', 'pdf.min.js', 'pdf.worker.min.js', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'icon-maskable-512.png'];
 self.addEventListener('install', function(e){
   e.waitUntil(caches.open(V).then(function(c){ return c.addAll(CORE); }).then(function(){ return self.skipWaiting(); }));

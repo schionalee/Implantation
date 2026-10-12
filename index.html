@@ -168,6 +168,7 @@ ul.tips{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:4px;co
       <li>Dans la caméra : visez le repère A, touchez Placer, faites de même pour B. Les points apparaissent ensuite sur le sol.</li>
       <li>Précision attendue : 1 à 3 cm. Une pièce bien éclairée avec des textures au sol aide le suivi.</li>
       <li>Si le sol semble avoir glissé, utilisez Recaler sur vos deux repères.</li>
+      <li>Contrôler : l'application choisit un troisième point hors de la ligne A–B. Posez le réticule dessus pour mesurer l'écart en cm, et savoir si le plan est inversé.</li>
     </ul>
   </section>
 </div>
@@ -207,10 +208,17 @@ ul.tips{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:4px;co
       <button id="bUndo" class="hb" type="button">Annuler</button>
       <button class="hb bExit" type="button">Quitter</button>
     </div>
+    <div id="grpCheck" class="btns" hidden>
+      <button id="bCkOk" class="hb main" type="button">Valider le point</button>
+      <button id="bCkNext" class="hb" type="button">Autre point</button>
+      <button id="bCkMirror" class="hb" type="button" hidden>Inverser le plan</button>
+      <button id="bCkBack" class="hb" type="button">Retour</button>
+    </div>
     <div id="grpTrace" class="btns" hidden>
       <button id="bPrev" class="hb" type="button" aria-label="Point précédent">◀</button>
       <button id="bNext" class="hb main" type="button">Point suivant ▶</button>
       <button id="bNear" class="hb" type="button" aria-pressed="false">Plus proche</button>
+      <button id="bCheck" class="hb" type="button">Contrôler</button>
       <button id="bRecal" class="hb" type="button">Recaler</button>
       <button class="hb bExit" type="button">Quitter</button>
     </div>
@@ -292,19 +300,30 @@ function parseDXFRaw(text){
   return ents;
 }
 // Plan (x, y) vers sol (X, Z) : le plan vu de dessus, y vers l'avant, donne Z = -y. Rotation + translation, échelle 1.
-function fitTransform(pA, pB, wA, wB){
-  var a1 = pA.x, b1 = -pA.y, a2 = pB.x, b2 = -pB.y;
+function fitTransform(pA, pB, wA, wB, mir){
+  var sg = mir ? -1 : 1, a1 = sg * pA.x, b1 = -pA.y, a2 = sg * pB.x, b2 = -pB.y;
   var dpa = a2 - a1, dpb = b2 - b1, dwa = wB.X - wA.X, dwb = wB.Z - wA.Z;
   var lp = Math.hypot(dpa, dpb), lw = Math.hypot(dwa, dwb);
   if(lp < 1e-6 || lw < 1e-6) return null;
   var phi = Math.atan2(dwb, dwa) - Math.atan2(dpb, dpa);
   var c = Math.cos(phi), s = Math.sin(phi);
   var mpa = (a1 + a2) / 2, mpb = (b1 + b2) / 2, mwa = (wA.X + wB.X) / 2, mwb = (wA.Z + wB.Z) / 2;
-  return { c: c, s: s, tx: mwa - (c * mpa - s * mpb), tz: mwb - (s * mpa + c * mpb), planDist: lp, measDist: lw, gap: Math.abs(lw - lp) };
+  return { c: c, s: s, tx: mwa - (c * mpa - s * mpb), tz: mwb - (s * mpa + c * mpb), planDist: lp, measDist: lw, gap: Math.abs(lw - lp), m: !!mir };
 }
 function applyTransform(T, x, y){
-  var a = x, b = -y;
+  var a = T.m ? -x : x, b = -y;
   return { X: T.c * a - T.s * b + T.tx, Z: T.s * a + T.c * b + T.tz };
+}
+function perpDist(pA, pB, p){
+  var dx = pB.x - pA.x, dy = pB.y - pA.y, L = Math.hypot(dx, dy);
+  return L ? Math.abs(dx * (p.y - pA.y) - dy * (p.x - pA.x)) / L : 0;
+}
+// err : écart mesuré au 3e point avec le calage actuel ; err2 : écart avec le plan inversé (miroir). Distances en m.
+function checkVerdict(err, err2){
+  if(err <= 0.03) return 'ok';
+  if(err <= 0.06) return 'limite';
+  if(err > 0.10 && isFinite(err2) && err2 <= 0.10 && err2 < 0.35 * err) return 'miroir';
+  return 'ecart';
 }
 function fmtDist(m){
   function nf(v, d){ return v.toFixed(d).replace('.', ','); }
@@ -616,6 +635,10 @@ function drawScene(P, V){
       }
     });
   }
+  if(AR.phase === 'check' && AR.check && AR.check.M){
+    drawMesh(M.ring, AR.check.M.X, y + 0.002, AR.check.M.Z, 0.05, 1, 0.05, COL.white);
+    drawMesh(M.cross, AR.check.M.X, y + 0.002, AR.check.M.Z, 0.07, 1, 0.07, COL.white);
+  }
   if(AR.reticle){
     var r = AR.reticle;
     drawMesh(M.ring, r.X, r.Y + 0.004, r.Z, 0.04, 1, 0.04, COL.white);
@@ -631,7 +654,7 @@ function project(P, V, X, Y, Z){
 function updateLabels(P, V, base){
   var box = $('#labels'), W = $('#overlay').clientWidth, H = $('#overlay').clientHeight;
   var idx = [];
-  if(AR.phase === 'trace'){
+  if(AR.phase !== 'calage'){
     var order = AR.world.map(function(w, i){ return { i: i, d: Math.hypot(w.X - base.X, w.Z - base.Z) }; }).sort(function(a, b){ return a.d - b.d; }).slice(0, 8).map(function(o){ return o.i; });
     idx = order; if(idx.indexOf(AR.target) < 0) idx.push(AR.target);
   }
@@ -656,7 +679,7 @@ function setText(el, t){ if(el.textContent !== t) el.textContent = t; }
 
 function renderCalage(){
   AR.phase = 'calage';
-  $('#grpCalage').hidden = false; $('#grpTrace').hidden = true; $('#guide').hidden = true; $('#hudGap').hidden = true;
+  $('#grpCalage').hidden = false; $('#grpTrace').hidden = true; $('#grpCheck').hidden = true; $('#guide').hidden = true; $('#hudGap').hidden = true;
   var ri = AR.step === 0 ? state.refA : state.refB, L = AR.step === 0 ? 'A' : 'B', rr0 = rel(ri);
   setText($('#hudMsg'), 'Repère ' + L + ' : ' + lab(ri) + ' (x ' + fm(rr0.x) + ' ; y ' + fm(rr0.y) + ')');
   $('#bPlace').textContent = 'Placer le repère ' + L;
@@ -665,12 +688,12 @@ function renderCalage(){
 }
 function renderTrace(){
   AR.phase = 'trace';
-  $('#grpCalage').hidden = true; $('#grpTrace').hidden = false; $('#guide').hidden = false;
+  $('#grpCalage').hidden = true; $('#grpTrace').hidden = false; $('#grpCheck').hidden = true; $('#guide').hidden = false;
   setText($('#hudMsg'), 'Suivez le point, marquez le sol sous le réticule.');
   setText($('#hudSub'), 'Touchez Point suivant pour passer au suivant.');
   var g = $('#hudGap'), mm = Math.round(AR.T.gap * 1000);
   g.hidden = false; g.className = AR.T.gap > 0.02 ? 'warn' : 'ok';
-  g.textContent = 'Écart de calage : ' + mm + ' mm sur ' + fmtDist(AR.T.planDist) + (AR.T.gap > 0.02 ? ' · précision réduite, utilisez Recaler.' : '');
+  g.textContent = 'Écart de calage : ' + mm + ' mm sur ' + fmtDist(AR.T.planDist) + (AR.T.gap > 0.02 ? ' · précision réduite, utilisez Recaler.' : '') + (AR.mirror ? ' · plan inversé' : '');
 }
 function toast(msg){
   var t = $('#toast'); t.textContent = msg; t.hidden = false;
@@ -681,7 +704,7 @@ function place(){
   AR.refs[AR.step] = { X: AR.reticle.X, Y: AR.reticle.Y, Z: AR.reticle.Z };
   if(AR.step === 0){ AR.step = 1; renderCalage(); return; }
   var a = AR.refs[0], b = AR.refs[1];
-  var T = fitTransform(state.points[state.refA], state.points[state.refB], { X: a.X, Z: a.Z }, { X: b.X, Z: b.Z });
+  var T = fitTransform(state.points[state.refA], state.points[state.refB], { X: a.X, Z: a.Z }, { X: b.X, Z: b.Z }, AR.mirror);
   if(!T){ toast('Les deux repères sont trop proches. Recommencez.'); AR.step = 0; AR.refs = [null, null]; renderCalage(); return; }
   AR.T = T; AR.floorY = (a.Y + b.Y) / 2;
   AR.world = state.points.map(function(p){ return applyTransform(T, p.x, p.y); });
@@ -693,6 +716,67 @@ function recal(){ AR.step = 0; AR.refs = [null, null]; AR.T = null; AR.world = [
 function step(d){
   AR.nearest = false; $('#bNear').setAttribute('aria-pressed', 'false');
   var n = state.points.length; AR.target = (AR.target + d + n) % n;
+}
+
+/* ---------- Contrôle sur un troisième point ---------- */
+function checkCandidates(){
+  var A = state.points[state.refA], B = state.points[state.refB], out = [];
+  state.points.forEach(function(p, i){
+    if(i === state.refA || i === state.refB) return;
+    var d = perpDist(A, B, p); if(d >= 0.5) out.push({ i: i, d: d });
+  });
+  out.sort(function(a, b){ return b.d - a.d; });
+  return out.map(function(o){ return o.i; });
+}
+function startCheck(){
+  var list = checkCandidates();
+  if(!list.length){ toast('Aucun point assez éloigné de la ligne A–B pour contrôler le calage.'); return; }
+  AR.check = { list: list, k: 0, prev: AR.target, M: null };
+  AR.target = list[0]; AR.nearest = false; $('#bNear').setAttribute('aria-pressed', 'false');
+  renderCheck();
+}
+function renderCheck(){
+  AR.phase = 'check'; AR.check.M = null;
+  $('#grpCalage').hidden = true; $('#grpTrace').hidden = true; $('#grpCheck').hidden = false; $('#guide').hidden = false;
+  $('#bCkMirror').hidden = true; $('#bCkNext').hidden = AR.check.list.length < 2;
+  setText($('#hudMsg'), 'Contrôle : allez sur le point ' + lab(AR.target));
+  setText($('#hudSub'), 'Posez le réticule sur ce repère connu au sol, puis touchez Valider le point.');
+  $('#hudGap').hidden = true;
+}
+function checkNext(){ var c = AR.check; c.k = (c.k + 1) % c.list.length; AR.target = c.list[c.k]; renderCheck(); }
+function checkBack(){
+  var c = AR.check; AR.check = null;
+  if(c && c.prev != null && AR.world[c.prev]) AR.target = c.prev;
+  renderTrace();
+}
+function evalCheck(){
+  var c = AR.check, i = AR.target, p = state.points[i], M = c.M, P = AR.world[i];
+  var err = Math.hypot(M.X - P.X, M.Z - P.Z), a = AR.refs[0], b = AR.refs[1];
+  var T2 = fitTransform(state.points[state.refA], state.points[state.refB], { X: a.X, Z: a.Z }, { X: b.X, Z: b.Z }, !AR.mirror);
+  var P2 = T2 ? applyTransform(T2, p.x, p.y) : null;
+  var err2 = P2 ? Math.hypot(M.X - P2.X, M.Z - P2.Z) : Infinity;
+  var v = checkVerdict(err, err2), g = $('#hudGap'), msg, cls = 'warn';
+  if(v === 'ok'){ msg = 'Calage vérifié sur ' + lab(i) + ' : écart ' + fmtDist(err) + '.'; cls = 'ok'; }
+  else if(v === 'limite') msg = 'Écart de ' + fmtDist(err) + ' sur ' + lab(i) + ' : limite acceptable.';
+  else if(v === 'miroir') msg = 'Plan probablement inversé (miroir) : écart de ' + fmtDist(err) + ', qui tomberait à ' + fmtDist(err2) + ' une fois le plan inversé.';
+  else msg = 'Écart de ' + fmtDist(err) + ' sur ' + lab(i) + ' alors que A–B est bon. Vérifiez l\'unité, l\'échelle et la pose des repères, puis Recaler.';
+  g.hidden = false; g.className = cls; g.textContent = msg;
+  setText($('#hudMsg'), 'Contrôle sur ' + lab(i));
+  var mb = $('#bCkMirror'); mb.hidden = !(v === 'miroir' || v === 'ecart'); mb.textContent = AR.mirror ? 'Rétablir le plan' : 'Inverser le plan';
+  mb.className = 'hb' + (v === 'miroir' ? ' main' : '');
+}
+function checkValidate(){
+  if(!AR.reticle){ toast('Aucun sol détecté. Bougez doucement le téléphone en visant le sol.'); return; }
+  AR.check.M = { X: AR.reticle.X, Z: AR.reticle.Z };
+  evalCheck();
+}
+function toggleMirror(){
+  var a = AR.refs[0], b = AR.refs[1];
+  var T = fitTransform(state.points[state.refA], state.points[state.refB], { X: a.X, Z: a.Z }, { X: b.X, Z: b.Z }, !AR.mirror);
+  if(!T) return;
+  AR.mirror = !AR.mirror; AR.T = T;
+  AR.world = state.points.map(function(q){ return applyTransform(T, q.x, q.y); });
+  if(AR.check && AR.check.M) evalCheck();
 }
 
 function onFrame(t, frame){
@@ -746,7 +830,7 @@ async function startAR(){
   btn.disabled = true;
   try{
     initGL();
-    AR.refs = [null, null]; AR.step = 0; AR.T = null; AR.world = []; AR.reticle = null;
+    AR.refs = [null, null]; AR.step = 0; AR.T = null; AR.world = []; AR.reticle = null; AR.mirror = false; AR.check = null;
     $('#overlay').hidden = false; renderCalage();
     var session = await navigator.xr.requestSession('immersive-ar', {
       requiredFeatures: ['hit-test'], optionalFeatures: ['dom-overlay'], domOverlay: { root: $('#overlay') }
@@ -924,6 +1008,11 @@ $('#start').addEventListener('click', startAR);
 $('#bPlace').addEventListener('click', place);
 $('#bUndo').addEventListener('click', undo);
 $('#bRecal').addEventListener('click', recal);
+$('#bCheck').addEventListener('click', startCheck);
+$('#bCkOk').addEventListener('click', checkValidate);
+$('#bCkNext').addEventListener('click', checkNext);
+$('#bCkBack').addEventListener('click', checkBack);
+$('#bCkMirror').addEventListener('click', toggleMirror);
 $('#bNext').addEventListener('click', function(){ step(1); });
 $('#bPrev').addEventListener('click', function(){ step(-1); });
 $('#bNear').addEventListener('click', function(){
