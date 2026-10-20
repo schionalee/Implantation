@@ -103,6 +103,7 @@ ul.tips{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:4px;co
 .hb.main{background:var(--hud-accent);color:#1A0912;border-color:transparent;flex-grow:3}
 .hb[aria-pressed="true"]{background:#fff;color:#10161B}
 @media (max-width:380px){h1{font-size:38px}}
+input,select,textarea{font-size:16px}
 </style>
 
 <div class="wrap">
@@ -272,7 +273,7 @@ function parseDXFRaw(text){
       if(val === 'SECTION') expectName = true;
       else if(val === 'ENDSEC') section = '';
       else if(section === 'TABLES' && val === 'LAYER') curLayer = { name: '', color: 7 };
-      else if(section === 'ENTITIES' && (val === 'POINT' || val === 'CIRCLE' || val === 'INSERT')) cur = { x: NaN, y: NaN, layer: '0', aci: 256, rgb: null };
+      else if(section === 'ENTITIES' && (val === 'POINT' || val === 'CIRCLE' || val === 'INSERT')) cur = { x: NaN, y: NaN, layer: '0', aci: 256, rgb: null, type: val };
     } else if(code === 2 && expectName){ section = val; expectName = false; }
     else if(curLayer){
       if(code === 2) curLayer.name = val;
@@ -283,6 +284,7 @@ function parseDXFRaw(text){
       else if(code === 8) cur.layer = val;
       else if(code === 62) cur.aci = parseInt(val, 10);
       else if(code === 420) cur.rgb = parseInt(val, 10);
+      else if(code === 2 && cur.type === 'INSERT') cur.block = val;
     }
   }
   flush();
@@ -863,7 +865,7 @@ function updateStart(keepMsg){
   else { st.textContent = 'Réalité augmentée disponible sur cet appareil.'; st.className = 'status ok'; }
 }
 async function checkAR(){
-  if(!window.isSecureContext){ arReason = 'La page doit être servie en HTTPS pour accéder à la caméra.'; }
+  if(!window.isSecureContext && !window.__arNativeSupported){ arReason = 'La page doit être servie en HTTPS pour accéder à la caméra.'; }
   else if(!navigator.xr){ arReason = 'Ce navigateur ne prend pas en charge la RA web. Sur iPhone, Safari ne le permet pas : utilisez Chrome sur un téléphone Android compatible ARCore.'; }
   else {
     try{
@@ -883,14 +885,25 @@ function buildDxfColors(){
   order.sort(function(a, b){ return cnt[b] - cnt[a]; });
   sel.innerHTML = '';
   var all = document.createElement('option'); all.value = 'all'; all.textContent = 'Toutes les couleurs (' + state.dxf.length + ')'; sel.appendChild(all);
-  order.forEach(function(k){ var o = document.createElement('option'); o.value = k; o.textContent = colorName(k) + ' (' + cnt[k] + ')'; sel.appendChild(o); });
+  order.forEach(function(k){
+    var o = document.createElement('option'); o.value = k; o.textContent = colorName(k) + ' (' + cnt[k] + ')'; sel.appendChild(o);
+    var bc = {}, bo = [];
+    state.dxf.forEach(function(e){ if(String(e.color) !== k || e.type !== 'INSERT' || !e.block) return; if(!(e.block in bc)){ bc[e.block] = 0; bo.push(e.block); } bc[e.block]++; });
+    bo.sort(function(a, b){ return bc[b] - bc[a]; });
+    bo.forEach(function(b){ var q = document.createElement('option'); q.value = k + '\u2020' + b; q.textContent = '   \u21b3 ' + colorName(k) + ' \u00b7 centre du bloc \u00ab ' + b + ' \u00bb (' + bc[b] + ')'; sel.appendChild(q); });
+  });
   sel.value = cnt['1'] ? '1' : 'all';
+  if(cnt['1']){ var re = Array.prototype.filter.call(sel.options, function(o){ return o.value.indexOf('1\u2020') === 0; })[0]; if(re) sel.value = re.value; }
   $('#dxfBox').hidden = !state.dxf.length;
 }
 function applyDxf(){
   var v = $('#dxfColor').value, seen = {}, lines = [], n = 0;
   (state.dxf || []).forEach(function(e){
-    if(v !== 'all' && String(e.color) !== v) return;
+    if(v !== 'all'){
+      var cut = v.indexOf('\u2020');
+      if(cut >= 0){ if(String(e.color) !== v.slice(0, cut) || e.type !== 'INSERT' || e.block !== v.slice(cut + 1)) return; }
+      else if(String(e.color) !== v) return;
+    }
     var key = e.x.toFixed(4) + '|' + e.y.toFixed(4);
     if(seen[key]) return; seen[key] = 1;
     n++; lines.push('P' + n + ' ; ' + (+e.x.toFixed(4)) + ' ; ' + (+e.y.toFixed(4)));
