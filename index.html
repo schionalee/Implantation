@@ -20,7 +20,7 @@
 /* Concept : carnet de géomètre. Un seul flux vertical, étapes numérotées (l'ordre est réel), rose de repérage sur gris béton. */
 :root{
   --bg:#E4E8EA; --surface:#F3F5F6; --ink:#17222B; --muted:#586671; --line:#BFC8CE;
-  --accent:#D4146A; --accent-ink:#FFFFFF; --ok:#16774C; --warn:#A85A0B;
+  --accent:#D4146A; --accent-ink:#FFFFFF; --ok:#16774C; --warn:#A85A0B; --done:#1F63D6;
   --f-display:'Barlow Condensed','Arial Narrow',sans-serif;
   --f-body:'Barlow',system-ui,-apple-system,'Segoe UI',sans-serif;
   --f-mono:'IBM Plex Mono',ui-monospace,Menlo,Consolas,monospace;
@@ -29,12 +29,12 @@
 @media (prefers-color-scheme:dark){
   :root:not([data-theme="light"]){
     --bg:#10161B; --surface:#192128; --ink:#E7EDF0; --muted:#97A5AF; --line:#33414B;
-    --accent:#FF4D94; --accent-ink:#1A0912; --ok:#4BD493; --warn:#F2A64B; color-scheme:dark;
+    --accent:#FF4D94; --accent-ink:#1A0912; --ok:#4BD493; --warn:#F2A64B; --done:#5C9BFF; color-scheme:dark;
   }
 }
 :root[data-theme="dark"]{
   --bg:#10161B; --surface:#192128; --ink:#E7EDF0; --muted:#97A5AF; --line:#33414B;
-  --accent:#FF4D94; --accent-ink:#1A0912; --ok:#4BD493; --warn:#F2A64B; color-scheme:dark;
+  --accent:#FF4D94; --accent-ink:#1A0912; --ok:#4BD493; --warn:#F2A64B; --done:#5C9BFF; color-scheme:dark;
 }
 *{box-sizing:border-box}
 [hidden]{display:none!important}
@@ -58,6 +58,8 @@ select,input[type=number],input[type=text]{min-height:44px}
 .btn{min-height:48px;padding:0 18px;border-radius:4px;border:1px solid var(--ink);background:transparent;color:var(--ink);font:600 15px/1 var(--f-body);cursor:pointer}
 .btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);font-size:16px}
 .btn:disabled{opacity:.45;cursor:not-allowed}
+.btnrow{display:flex;gap:10px;flex-wrap:wrap}
+.btnrow .btn{flex:1 1 180px}
 .filebtn{display:flex;flex-direction:column;gap:4px}
 .chk{display:flex;align-items:center;gap:10px;min-height:44px;font:500 14px/1.3 var(--f-body);letter-spacing:0;text-transform:none;color:var(--ink);cursor:pointer}
 .chk input{width:22px;height:22px;flex:none;accent-color:var(--accent)}
@@ -85,6 +87,11 @@ ul.tips{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:4px;co
 #overlay #labels{position:absolute;inset:0;pointer-events:none;overflow:hidden}
 .lbl{position:absolute;left:0;top:0;padding:2px 6px;border-radius:3px;background:var(--hud-bg);font:500 12px/1.3 var(--f-mono);white-space:nowrap;will-change:transform}
 .lbl.t{background:var(--hud-accent);color:#1A0912}
+.lbl.d{background:#2F7BFF;color:#fff}
+.lbl.r{background:#43D690;color:#06210F}
+#hudTop,#hudBottom{position:relative;z-index:2}
+#overlay #drag{position:absolute;inset:0;pointer-events:none;touch-action:none}
+#overlay #drag.on{pointer-events:auto}
 .hud-card{background:var(--hud-bg);border-radius:6px;padding:10px 12px}
 #hudMsg{font:600 16px/1.3 var(--f-body)}
 #hudSub,#hudGap{font-size:13px;line-height:1.4;opacity:.92;margin-top:2px}
@@ -147,7 +154,7 @@ input,select,textarea{font-size:16px}
     </div>
     <p id="planInfo" class="status" role="status"></p>
     <canvas id="preview" aria-label="Aperçu du plan"></canvas>
-    <button id="zoomBtn" class="btn" type="button" disabled>Agrandir et zoomer le plan</button>
+    <div class="btnrow"><button id="zoomBtn" class="btn" type="button" disabled>Agrandir et zoomer le plan</button><button id="rotBtn" class="btn" type="button" disabled>Pivoter le plan de 90°</button></div>
   </section>
 
   <section aria-labelledby="h-ref">
@@ -165,8 +172,10 @@ input,select,textarea{font-size:16px}
     <h2 id="h-go"><span class="n">03</span>Tracer au sol</h2>
     <button id="start" class="btn primary" type="button" disabled>Démarrer la réalité augmentée</button>
     <p id="arStatus" class="status" role="status">Vérification de la compatibilité…</p>
+    <button id="doneReset" class="btn" type="button" hidden>Remettre tous les points à traiter</button>
     <ul class="tips">
-      <li>Dans la caméra : visez le repère A, touchez Placer, faites de même pour B. Les points apparaissent ensuite sur le sol.</li>
+      <li>Dans la caméra : visez le repère A, touchez Placer, faites de même pour B. Glissez un repère du doigt pour l'ajuster, puis Valider : les points apparaissent sur le sol.</li>
+      <li>Touchez Fait une fois un point marqué au sol : il passe en bleu, ici comme sur le plan.</li>
       <li>Précision attendue : 1 à 3 cm. Une pièce bien éclairée avec des textures au sol aide le suivi.</li>
       <li>Si le sol semble avoir glissé, utilisez Recaler sur vos deux repères.</li>
       <li>Contrôler : l'application choisit un troisième point hors de la ligne A–B. Posez le réticule dessus pour mesurer l'écart en cm, et savoir si le plan est inversé.</li>
@@ -181,7 +190,7 @@ input,select,textarea{font-size:16px}
   <canvas id="viewCanvas" aria-label="Plan zoomable"></canvas>
   <div id="vBottom">
     <div id="vSel" hidden><span id="vSelTxt"></span><button id="vSetA" class="vb" type="button">Repère A</button><button id="vSetB" class="vb" type="button">Repère B</button></div>
-    <div id="vTools"><button id="vOut" class="vb" type="button" aria-label="Dézoomer">−</button><button id="vFit" class="vb" type="button">Ajuster</button><button id="vIn" class="vb" type="button" aria-label="Zoomer">+</button></div>
+    <div id="vTools"><button id="vOut" class="vb" type="button" aria-label="Dézoomer">−</button><button id="vFit" class="vb" type="button">Ajuster</button><button id="vRot" class="vb" type="button" aria-label="Pivoter de 90°">⟳ 90°</button><button id="vIn" class="vb" type="button" aria-label="Zoomer">+</button></div>
   </div>
 </div>
 
@@ -191,6 +200,7 @@ input,select,textarea{font-size:16px}
     <div id="hudSub"></div>
     <div id="hudGap" hidden></div>
   </div>
+  <div id="drag"></div>
   <div id="labels"></div>
   <div id="hudBottom">
     <div id="toast" class="hud-card" hidden role="status"></div>
@@ -217,7 +227,8 @@ input,select,textarea{font-size:16px}
     </div>
     <div id="grpTrace" class="btns" hidden>
       <button id="bPrev" class="hb" type="button" aria-label="Point précédent">◀</button>
-      <button id="bNext" class="hb main" type="button">Point suivant ▶</button>
+      <button id="bDone" class="hb main" type="button">Fait ✓</button>
+      <button id="bNext" class="hb" type="button" aria-label="Point suivant">▶</button>
       <button id="bNear" class="hb" type="button" aria-pressed="false">Plus proche</button>
       <button id="bCheck" class="hb" type="button">Contrôler</button>
       <button id="bRecal" class="hb" type="button">Recaler</button>
@@ -383,13 +394,23 @@ var EXAMPLE = [
   'C2 ; 2,80 ; 0,80',
   'C3 ; 2,00 ; 2,10'
 ].join('\n');
-var state = { points: [], bad: 0, refA: 0, refB: 1, originOn: true, dxf: null, pdfDoc: null, pdf: null, bg: null };
+var state = { points: [], bad: 0, refA: 0, refB: 1, originOn: true, dxf: null, pdfDoc: null, pdf: null, bg: null, rot: 0, done: {} };
 var xrSupported = false, arReason = '';
 
 function store(){
-  try{ localStorage.setItem(STORE, JSON.stringify({ text: $('#plan').value, unit: $('#unit').value, o: state.originOn, a: nameOf(state.refA), b: nameOf(state.refB) })); }catch(e){}
+  try{ localStorage.setItem(STORE, JSON.stringify({ text: $('#plan').value, unit: $('#unit').value, o: state.originOn, a: nameOf(state.refA), b: nameOf(state.refB), r: state.rot, d: Object.keys(state.done) })); }catch(e){}
 }
 function nameOf(i){ return state.points[i] ? state.points[i].name : ''; }
+// Points traités : repérés par nom et coordonnées, pour survivre à une réimportation du même plan
+function pkey(p){ return p.name + '|' + p.x.toFixed(3) + '|' + p.y.toFixed(3); }
+function isDone(i){ var p = state.points[i]; return !!(p && state.done[pkey(p)]); }
+function doneCount(){ var n = 0; state.points.forEach(function(p, i){ if(isDone(i)) n++; }); return n; }
+function setDone(i, on){ var p = state.points[i]; if(!p) return; if(on) state.done[pkey(p)] = 1; else delete state.done[pkey(p)]; store(); updateDoneUI(); }
+function updateDoneUI(){
+  var n = doneCount(), b = $('#doneReset');
+  b.hidden = !n; b.textContent = 'Remettre tous les points à traiter (' + n + ' fait' + (n > 1 ? 's' : '') + ')';
+  drawPreview();
+}
 function org(){ var p = state.points[state.refA]; return state.originOn && p ? p : { x: 0, y: 0 }; }
 function lab(i){ return state.originOn && i === state.refA ? '0' : nameOf(i); }
 function rel(i){ var p = state.points[i], o = org(); return { x: p.x - o.x, y: p.y - o.y }; }
@@ -459,18 +480,28 @@ function drawPlan(cv, view, sel){
   var pts = state.points;
   c.textBaseline = 'alphabetic';
   if(!pts.length){ c.fillStyle = col('--muted'); c.font = '13px "IBM Plex Mono", monospace'; c.textAlign = 'center'; c.fillText('Aucun point reconnu', w / 2, h / 2); return; }
+  // Rotation d'affichage par quarts de tour dans le sens horaire (les coordonnées du plan ne changent pas)
+  var rot = ((state.rot % 4) + 4) % 4;
+  function rp(x, y){ return rot === 1 ? { x: y, y: -x } : rot === 2 ? { x: -x, y: -y } : rot === 3 ? { x: -y, y: x } : { x: x, y: y }; }
   var minx = Infinity, maxx = -Infinity, miny = Infinity, maxy = -Infinity;
-  pts.forEach(function(p){ minx = Math.min(minx, p.x); maxx = Math.max(maxx, p.x); miny = Math.min(miny, p.y); maxy = Math.max(maxy, p.y); });
-  if(state.bg){ minx = Math.min(minx, 0); miny = Math.min(miny, 0); maxx = Math.max(maxx, state.bg.w); maxy = Math.max(maxy, state.bg.h); }
+  function grow(x, y){ var q = rp(x, y); minx = Math.min(minx, q.x); maxx = Math.max(maxx, q.x); miny = Math.min(miny, q.y); maxy = Math.max(maxy, q.y); }
+  pts.forEach(function(p){ grow(p.x, p.y); });
+  if(state.bg){ grow(0, 0); grow(state.bg.w, 0); grow(0, state.bg.h); grow(state.bg.w, state.bg.h); }
   var pad = 36, bw = maxx - minx, bh = maxy - miny;
   var sc = Math.min((w - 2 * pad) / (bw || 1), (h - 2 * pad) / (bh || 1));
   if(!isFinite(sc) || sc <= 0) sc = 1;
   var ox = (w - bw * sc) / 2 - minx * sc, oy = (h + bh * sc) / 2 + miny * sc;
   var z = view.z, pxv = view.px, pyv = view.py, sce = sc * z;
-  function sx(x){ return (ox + x * sc - w / 2) * z + w / 2 + pxv; }
-  function sy(y){ return (oy - y * sc - h / 2) * z + h / 2 + pyv; }
-  cv._m = { sx: sx, sy: sy, sc: sce, w: w, h: h };
-  if(state.bg){ c.globalAlpha = 0.45; c.imageSmoothingQuality = 'high'; c.drawImage(state.bg.canvas, sx(0), sy(state.bg.h), state.bg.w * sce, state.bg.h * sce); c.globalAlpha = 1; }
+  function pt(x, y){ var q = rp(x, y); return { x: (ox + q.x * sc - w / 2) * z + w / 2 + pxv, y: (oy - q.y * sc - h / 2) * z + h / 2 + pyv }; }
+  cv._m = { pt: pt, sc: sce, w: w, h: h };
+  if(state.bg){
+    // image -> plan -> écran, en une seule transformation affine
+    var O = pt(0, 0), E1 = pt(1, 0), E2 = pt(0, 1), kw = state.bg.w / state.bg.canvas.width, kh = state.bg.h / state.bg.canvas.height;
+    var ex = { x: E1.x - O.x, y: E1.y - O.y }, ey = { x: E2.x - O.x, y: E2.y - O.y };
+    c.save(); c.globalAlpha = 0.45; c.imageSmoothingQuality = 'high';
+    c.setTransform(dpr * kw * ex.x, dpr * kw * ex.y, -dpr * kh * ey.x, -dpr * kh * ey.y, dpr * (O.x + state.bg.h * ey.x), dpr * (O.y + state.bg.h * ey.y));
+    c.drawImage(state.bg.canvas, 0, 0); c.restore();
+  }
   // barre d'échelle
   var nice = [0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50, 100], len = nice[0];
   var nice2 = nice.concat([200, 500, 1000, 0.01, 0.02, 0.05].sort(function(a, b){ return a - b; })); nice2.sort(function(a, b){ return a - b; });
@@ -479,21 +510,23 @@ function drawPlan(cv, view, sel){
   c.moveTo(12, h - 14); c.lineTo(12 + len * sce, h - 14); c.moveTo(12, h - 19); c.lineTo(12, h - 9); c.moveTo(12 + len * sce, h - 19); c.lineTo(12 + len * sce, h - 9); c.stroke();
   c.fillStyle = col('--muted'); c.font = '11px "IBM Plex Mono", monospace'; c.textAlign = 'left';
   c.fillText((len < 1 ? Math.round(len * 100) + ' cm' : len + ' m') + (z > 1.01 ? '   ×' + z.toFixed(1).replace('.', ',') : ''), 12, h - 24);
-  c.textAlign = 'right'; c.fillText('x →   y ↑', w - 12, 18);
+  c.textAlign = 'right'; c.fillText(['x →   y ↑', 'x ↓   y →', 'x ←   y ↓', 'x ↑   y ←'][rot], w - 12, 18);
   // points
   c.textAlign = 'left'; c.font = '11px "IBM Plex Mono", monospace';
   pts.forEach(function(p, i){
-    var X = sx(p.x), Y = sy(p.y), isRef = (i === state.refA || i === state.refB) && state.refA !== state.refB;
-    c.fillStyle = isRef ? col('--accent') : col('--ink');
-    c.beginPath(); c.arc(X, Y, isRef ? 4.5 : 3.2, 0, Math.PI * 2); c.fill();
+    var S = pt(p.x, p.y), X = S.x, Y = S.y, isRef = (i === state.refA || i === state.refB) && state.refA !== state.refB, dn = isDone(i);
+    var pc = dn ? col('--done') : isRef ? col('--accent') : col('--ink');
+    c.fillStyle = pc;
+    c.beginPath(); c.arc(X, Y, isRef || dn ? 4.5 : 3.2, 0, Math.PI * 2); c.fill();
     if(isRef){ c.strokeStyle = col('--accent'); c.lineWidth = 2; c.beginPath(); c.arc(X, Y, 10, 0, Math.PI * 2); c.stroke(); }
-    c.fillStyle = isRef ? col('--accent') : col('--ink');
+    c.fillStyle = pc;
     c.fillText(lab(i) + (isRef ? (i === state.refA ? '  A' : '  B') : ''), X + 8, Y - 8);
     if(i === sel){ c.strokeStyle = col('--warn'); c.lineWidth = 2.5; c.beginPath(); c.arc(X, Y, 15, 0, Math.PI * 2); c.stroke(); }
   });
 }
 function drawPreview(){ drawPlan($('#preview'), { z: 1, px: 0, py: 0 }, -1); updateZoomBtn(); }
-function updateZoomBtn(){ $('#zoomBtn').disabled = !state.points.length; }
+function updateZoomBtn(){ $('#zoomBtn').disabled = $('#rotBtn').disabled = !state.points.length; }
+function rotatePlan(){ state.rot = (state.rot + 1) % 4; store(); drawPreview(); if(!$('#viewer').hidden){ VIEW.px = 0; VIEW.py = 0; drawViewer(); } }
 
 /* ---------- Plan en grand : zoom, déplacement, choix des repères ---------- */
 var VIEW = { z: 1, px: 0, py: 0, sel: -1 }, ptrs = {}, tapT = 0, tapX = 0, tapY = 0, gest = null;
@@ -515,11 +548,11 @@ function closeViewer(){ $('#viewer').hidden = true; document.body.style.overflow
 function pickPoint(x, y){
   var m = $('#viewCanvas')._m; if(!m) return;
   var best = -1, bd = 26;
-  state.points.forEach(function(p, i){ var d = Math.hypot(m.sx(p.x) - x, m.sy(p.y) - y); if(d < bd){ bd = d; best = i; } });
+  state.points.forEach(function(p, i){ var q = m.pt(p.x, p.y), d = Math.hypot(q.x - x, q.y - y); if(d < bd){ bd = d; best = i; } });
   VIEW.sel = best;
   var box = $('#vSel');
   if(best < 0){ box.hidden = true; }
-  else { var r = rel(best); $('#vSelTxt').textContent = lab(best) + '  x ' + fm(r.x) + ' ; y ' + fm(r.y) + ' m'; box.hidden = false; }
+  else { var r = rel(best); $('#vSelTxt').textContent = lab(best) + '  x ' + fm(r.x) + ' ; y ' + fm(r.y) + ' m' + (isDone(best) ? ' · fait' : ''); box.hidden = false; }
   drawViewer();
 }
 function setRef(which){
@@ -610,7 +643,7 @@ function drawMesh(m, x, y, z, sx, sy, sz, color){
   gl.bindBuffer(gl.ARRAY_BUFFER, m.b); gl.vertexAttribPointer(L.pos, 3, gl.FLOAT, false, 0, 0);
   gl.drawArrays(m.mode, 0, m.n);
 }
-var COL = { white: [1,1,1,1], pink: [0.95,0.12,0.45,1], ref: [0.26,0.88,0.56,1], target: [1,0.86,0.1,1] };
+var COL = { white: [1,1,1,1], pink: [0.95,0.12,0.45,1], ref: [0.26,0.88,0.56,1], target: [1,0.86,0.1,1], done: [0.18,0.48,1,1] };
 
 function drawScene(P, V){
   var gl = AR.gl, L = AR.loc, M = AR.mesh;
@@ -619,15 +652,16 @@ function drawScene(P, V){
   gl.uniformMatrix4fv(L.P, false, P); gl.uniformMatrix4fv(L.V, false, V);
   var y = AR.floorY + 0.003;
   if(AR.phase === 'calage'){
-    AR.refs.forEach(function(r){
+    AR.refs.forEach(function(r, k){
       if(!r) return;
-      drawMesh(M.ring, r.X, r.Y + 0.003, r.Z, 0.05, 1, 0.05, COL.ref);
-      drawMesh(M.cross, r.X, r.Y + 0.003, r.Z, 0.07, 1, 0.07, COL.ref);
+      var c = AR.drag && AR.drag.k === k ? COL.target : COL.ref;
+      drawMesh(M.ring, r.X, r.Y + 0.003, r.Z, 0.05, 1, 0.05, c);
+      drawMesh(M.cross, r.X, r.Y + 0.003, r.Z, 0.07, 1, 0.07, c);
     });
   } else {
     AR.world.forEach(function(w, i){
       var isT = i === AR.target, isRef = i === state.refA || i === state.refB;
-      var c = isRef ? COL.ref : COL.pink;
+      var c = isDone(i) ? COL.done : isRef ? COL.ref : COL.pink;
       drawMesh(M.disc, w.X, y, w.Z, 0.012, 1, 0.012, c);
       drawMesh(M.ring, w.X, y, w.Z, 0.03, 1, 0.03, COL.white);
       drawMesh(M.cross, w.X, y, w.Z, 0.05, 1, 0.05, c);
@@ -655,18 +689,21 @@ function project(P, V, X, Y, Z){
 }
 function updateLabels(P, V, base){
   var box = $('#labels'), W = $('#overlay').clientWidth, H = $('#overlay').clientHeight;
-  var idx = [];
+  var items = [];
   if(AR.phase !== 'calage'){
     var order = AR.world.map(function(w, i){ return { i: i, d: Math.hypot(w.X - base.X, w.Z - base.Z) }; }).sort(function(a, b){ return a.d - b.d; }).slice(0, 8).map(function(o){ return o.i; });
-    idx = order; if(idx.indexOf(AR.target) < 0) idx.push(AR.target);
+    if(order.indexOf(AR.target) < 0) order.push(AR.target);
+    items = order.map(function(i){ var w = AR.world[i]; return { X: w.X, Y: AR.floorY, Z: w.Z, t: lab(i), c: i === AR.target ? ' t' : isDone(i) ? ' d' : '' }; });
+  } else {
+    AR.refs.forEach(function(r, k){ if(r) items.push({ X: r.X, Y: r.Y, Z: r.Z, t: (k ? 'B' : 'A') + ' · ' + lab(k ? state.refB : state.refA), c: ' r' }); });
   }
-  while(AR.pool.length < idx.length){ var d = document.createElement('div'); d.className = 'lbl'; box.appendChild(d); AR.pool.push(d); }
+  while(AR.pool.length < items.length){ var d = document.createElement('div'); d.className = 'lbl'; box.appendChild(d); AR.pool.push(d); }
   AR.pool.forEach(function(el, k){
-    if(k >= idx.length){ el.hidden = true; return; }
-    var i = idx[k], w = AR.world[i], s = project(P, V, w.X, AR.floorY + 0.03, w.Z);
+    if(k >= items.length){ el.hidden = true; return; }
+    var it = items[k], s = project(P, V, it.X, it.Y + 0.03, it.Z);
     if(!s || Math.abs(s.x) > 1.1 || Math.abs(s.y) > 1.1){ el.hidden = true; return; }
-    el.hidden = false; el.className = 'lbl' + (i === AR.target ? ' t' : '');
-    if(el.textContent !== lab(i)) el.textContent = lab(i);
+    el.hidden = false; el.className = 'lbl' + it.c;
+    if(el.textContent !== it.t) el.textContent = it.t;
     el.style.transform = 'translate(' + Math.round((s.x * 0.5 + 0.5) * W + 8) + 'px,' + Math.round((1 - (s.y * 0.5 + 0.5)) * H - 24) + 'px)';
   });
 }
@@ -682,17 +719,25 @@ function setText(el, t){ if(el.textContent !== t) el.textContent = t; }
 function renderCalage(){
   AR.phase = 'calage';
   $('#grpCalage').hidden = false; $('#grpTrace').hidden = true; $('#grpCheck').hidden = true; $('#guide').hidden = true; $('#hudGap').hidden = true;
-  var ri = AR.step === 0 ? state.refA : state.refB, L = AR.step === 0 ? 'A' : 'B', rr0 = rel(ri);
-  setText($('#hudMsg'), 'Repère ' + L + ' : ' + lab(ri) + ' (x ' + fm(rr0.x) + ' ; y ' + fm(rr0.y) + ')');
-  $('#bPlace').textContent = 'Placer le repère ' + L;
+  if(AR.step === 2){
+    setText($('#hudMsg'), 'Ajustez A et B si besoin, puis validez.');
+    $('#bPlace').textContent = 'Valider le calage';
+  } else {
+    var ri = AR.step === 0 ? state.refA : state.refB, L = AR.step === 0 ? 'A' : 'B', rr0 = rel(ri);
+    setText($('#hudMsg'), 'Repère ' + L + ' : ' + lab(ri) + ' (x ' + fm(rr0.x) + ' ; y ' + fm(rr0.y) + ')');
+    $('#bPlace').textContent = 'Placer le repère ' + L;
+  }
   $('#bUndo').hidden = AR.step === 0;
+  $('#drag').classList.toggle('on', AR.step > 0);
   AR.hint = '';
 }
 function renderTrace(){
   AR.phase = 'trace';
   $('#grpCalage').hidden = true; $('#grpTrace').hidden = false; $('#grpCheck').hidden = true; $('#guide').hidden = false;
+  $('#drag').classList.remove('on'); AR.drag = null;
+  updateDoneBtn();
   setText($('#hudMsg'), 'Suivez le point, marquez le sol sous le réticule.');
-  setText($('#hudSub'), 'Touchez Point suivant pour passer au suivant.');
+  setText($('#hudSub'), 'Touchez Fait une fois le point marqué : il passe en bleu.');
   var g = $('#hudGap'), mm = Math.round(AR.T.gap * 1000);
   g.hidden = false; g.className = AR.T.gap > 0.02 ? 'warn' : 'ok';
   g.textContent = 'Écart de calage : ' + mm + ' mm sur ' + fmtDist(AR.T.planDist) + (AR.T.gap > 0.02 ? ' · précision réduite, utilisez Recaler.' : '') + (AR.mirror ? ' · plan inversé' : '');
@@ -702,22 +747,87 @@ function toast(msg){
   clearTimeout(toast.h); toast.h = setTimeout(function(){ t.hidden = true; }, 3800);
 }
 function place(){
+  if(AR.step === 2){ validateCalage(); return; }
   if(!AR.reticle){ toast('Aucun sol détecté. Bougez doucement le téléphone en visant le sol.'); return; }
   AR.refs[AR.step] = { X: AR.reticle.X, Y: AR.reticle.Y, Z: AR.reticle.Z };
-  if(AR.step === 0){ AR.step = 1; renderCalage(); return; }
+  AR.step++; renderCalage();
+  if(AR.step === 1) toast('Repère A placé. Glissez-le du doigt pour l\'ajuster.');
+}
+function validateCalage(){
   var a = AR.refs[0], b = AR.refs[1];
   var T = fitTransform(state.points[state.refA], state.points[state.refB], { X: a.X, Z: a.Z }, { X: b.X, Z: b.Z }, AR.mirror);
   if(!T){ toast('Les deux repères sont trop proches. Recommencez.'); AR.step = 0; AR.refs = [null, null]; renderCalage(); return; }
   AR.T = T; AR.floorY = (a.Y + b.Y) / 2;
   AR.world = state.points.map(function(p){ return applyTransform(T, p.x, p.y); });
-  AR.target = 0; AR.nearest = false; $('#bNear').setAttribute('aria-pressed', 'false');
+  AR.target = nextUndone(-1); AR.nearest = false; $('#bNear').setAttribute('aria-pressed', 'false');
   renderTrace();
 }
-function undo(){ if(AR.step === 1){ AR.step = 0; AR.refs = [null, null]; renderCalage(); } }
-function recal(){ AR.step = 0; AR.refs = [null, null]; AR.T = null; AR.world = []; renderCalage(); }
+function undo(){
+  if(AR.step === 2){ AR.step = 1; AR.refs[1] = null; }
+  else if(AR.step === 1){ AR.step = 0; AR.refs = [null, null]; }
+  AR.drag = null; renderCalage();
+}
+// Premier point non traité après i (dans l'ordre du plan), sinon i lui-même
+function nextUndone(i){
+  var n = state.points.length;
+  for(var k = 1; k <= n; k++){ var j = (i + k + n) % n; if(!isDone(j)) return j; }
+  return Math.max(0, i);
+}
+function markDone(){
+  var i = AR.target, on = !isDone(i);
+  setDone(i, on);
+  if(on){
+    if(doneCount() >= state.points.length) toast('Tous les points sont traités.');
+    else if(!AR.nearest) AR.target = nextUndone(i);
+  }
+  updateDoneBtn();
+}
+function updateDoneBtn(){ setText($('#bDone'), isDone(AR.target) ? 'Annuler fait' : 'Fait ✓'); }
+
+/* ---------- Glisser un repère à l'écran pendant le calage ---------- */
+// Rayon de la caméra passant par un point de l'écran, coupé par le plan horizontal de hauteur Y
+function screenToFloor(px, py, Y){
+  var F = AR.lastFrame; if(!F) return null;
+  var ov = $('#overlay'), W = ov.clientWidth, H = ov.clientHeight, P = F.P, C = F.C;
+  var nx = px / W * 2 - 1, ny = 1 - py / H * 2;
+  var vx = (nx + P[8]) / P[0], vy = (ny + P[9]) / P[5];
+  var dX = C[0] * vx + C[4] * vy - C[8], dY = C[1] * vx + C[5] * vy - C[9], dZ = C[2] * vx + C[6] * vy - C[10];
+  if(dY > -1e-4) return null;
+  var t = (Y - C[13]) / dY; if(t <= 0 || t > 50) return null;
+  return { X: C[12] + t * dX, Z: C[14] + t * dZ };
+}
+(function(){
+  var el = $('#drag');
+  function pos(e){ var b = $('#overlay').getBoundingClientRect(); return { x: e.clientX - b.left, y: e.clientY - b.top }; }
+  el.addEventListener('pointerdown', function(e){
+    var F = AR.lastFrame; if(AR.phase !== 'calage' || !F) return;
+    var q = pos(e), ov = $('#overlay'), W = ov.clientWidth, H = ov.clientHeight, best = -1, bd = 80;
+    AR.refs.forEach(function(r, k){
+      if(!r) return;
+      var s = project(F.P, F.V, r.X, r.Y, r.Z); if(!s) return;
+      var d = Math.hypot((s.x * 0.5 + 0.5) * W - q.x, (0.5 - s.y * 0.5) * H - q.y);
+      if(d < bd){ bd = d; best = k; }
+    });
+    if(best < 0){ toast('Posez le doigt près du repère A ou B pour le déplacer.'); return; }
+    var r = AR.refs[best], f = screenToFloor(q.x, q.y, r.Y); if(!f) return;
+    AR.drag = { k: best, id: e.pointerId, dx: r.X - f.X, dz: r.Z - f.Z };
+    try{ el.setPointerCapture(e.pointerId); }catch(_){}
+    e.preventDefault();
+  });
+  el.addEventListener('pointermove', function(e){
+    var D = AR.drag; if(!D || D.id !== e.pointerId) return;
+    var q = pos(e), r = AR.refs[D.k], f = r && screenToFloor(q.x, q.y, r.Y);
+    if(f){ r.X = f.X + D.dx; r.Z = f.Z + D.dz; }
+    e.preventDefault();
+  });
+  function up(e){ if(AR.drag && AR.drag.id === e.pointerId) AR.drag = null; }
+  el.addEventListener('pointerup', up); el.addEventListener('pointercancel', up);
+})();
+function recal(){ AR.step = 0; AR.refs = [null, null]; AR.T = null; AR.world = []; AR.drag = null; renderCalage(); }
 function step(d){
   AR.nearest = false; $('#bNear').setAttribute('aria-pressed', 'false');
   var n = state.points.length; AR.target = (AR.target + d + n) % n;
+  updateDoneBtn();
 }
 
 /* ---------- Contrôle sur un troisième point ---------- */
@@ -797,15 +907,21 @@ function onFrame(t, frame){
   var cam = pose.transform.matrix, camPos = { X: cam[12], Z: cam[14] };
   var base = AR.reticle ? { X: AR.reticle.X, Z: AR.reticle.Z } : camPos;
   if(AR.phase === 'trace' && AR.nearest){
-    var best = 0, bd = Infinity;
-    AR.world.forEach(function(w, i){ var d = Math.hypot(w.X - base.X, w.Z - base.Z); if(d < bd){ bd = d; best = i; } });
-    AR.target = best;
+    var best = -1, bd = Infinity, all = doneCount() >= AR.world.length;
+    AR.world.forEach(function(w, i){ if(!all && isDone(i)) return; var d = Math.hypot(w.X - base.X, w.Z - base.Z); if(d < bd){ bd = d; best = i; } });
+    if(best >= 0 && best !== AR.target){ AR.target = best; updateDoneBtn(); }
   }
   var now = performance.now();
   if(now - AR.lastHud > 90){
     AR.lastHud = now;
     if(AR.phase === 'calage'){
-      var hint = AR.reticle ? 'Posez le réticule exactement sur le repère au sol, puis touchez Placer.' : 'Balayez lentement le sol avec le téléphone pour détecter la surface.';
+      var hint;
+      if(AR.step === 2){
+        var ra = AR.refs[0], rb = AR.refs[1], pa = state.points[state.refA], pb = state.points[state.refB];
+        var dm = Math.hypot(rb.X - ra.X, rb.Z - ra.Z), dp = Math.hypot(pb.x - pa.x, pb.y - pa.y);
+        hint = 'A–B mesuré ' + fmtDist(dm) + ' pour ' + fmtDist(dp) + ' sur le plan (écart ' + Math.round(Math.abs(dm - dp) * 1000) + ' mm). Glissez un repère pour l\'ajuster.';
+      } else if(AR.drag) hint = 'Relâchez quand le repère est exactement sur la marque au sol.';
+      else hint = AR.reticle ? 'Posez le réticule exactement sur le repère au sol, puis touchez Placer.' + (AR.step ? ' Glissez A du doigt pour l\'ajuster.' : '') : 'Balayez lentement le sol avec le téléphone pour détecter la surface.';
       setText($('#hudSub'), hint);
     } else {
       var w = AR.world[AR.target], p = state.points[AR.target], hd = heading(cam);
@@ -813,7 +929,8 @@ function onFrame(t, frame){
       var fc = dx * hd.X + dz * hd.Z, rc = dx * (-hd.Z) + dz * hd.X;
       $('#arrow').style.transform = 'rotate(' + Math.atan2(rc, fc).toFixed(3) + 'rad)';
       var rr = rel(AR.target); setText($('#gName'), lab(AR.target)); setText($('#gDist'), fmtDist(dist));
-      setText($('#gCoord'), 'x ' + fm(rr.x) + ' ; y ' + fm(rr.y) + ' m · ' + (AR.target + 1) + '/' + state.points.length);
+      var nd = doneCount();
+      setText($('#gCoord'), 'x ' + fm(rr.x) + ' ; y ' + fm(rr.y) + ' m · ' + (AR.target + 1) + '/' + state.points.length + (isDone(AR.target) ? ' · fait' : '') + (nd ? ' · ' + nd + ' fait' + (nd > 1 ? 's' : '') : ''));
       $('#guide').classList.toggle('on', dist < 0.03);
     }
   }
@@ -822,7 +939,7 @@ function onFrame(t, frame){
     var vp = layer.getViewport(view); gl.viewport(vp.x, vp.y, vp.width, vp.height);
     var P = view.projectionMatrix, V = view.transform.inverse.matrix;
     drawScene(P, V);
-    if(vi++ === 0) updateLabels(P, V, base);
+    if(vi++ === 0){ AR.lastFrame = { P: P, V: V, C: view.transform.matrix }; updateLabels(P, V, base); }
   });
 }
 
@@ -832,7 +949,7 @@ async function startAR(){
   btn.disabled = true;
   try{
     initGL();
-    AR.refs = [null, null]; AR.step = 0; AR.T = null; AR.world = []; AR.reticle = null; AR.mirror = false; AR.check = null;
+    AR.refs = [null, null]; AR.step = 0; AR.T = null; AR.world = []; AR.reticle = null; AR.mirror = false; AR.check = null; AR.drag = null; AR.lastFrame = null;
     $('#overlay').hidden = false; renderCalage();
     var session = await navigator.xr.requestSession('immersive-ar', {
       requiredFeatures: ['hit-test'], optionalFeatures: ['dom-overlay'], domOverlay: { root: $('#overlay') }
@@ -1009,6 +1126,9 @@ var ptmr;
 $('#refA').addEventListener('change', function(){ if($('#pdfReal').value) applyPdf(); });
 $('#refB').addEventListener('change', function(){ if($('#pdfReal').value) applyPdf(); });
 $('#zoomBtn').addEventListener('click', openViewer);
+$('#rotBtn').addEventListener('click', rotatePlan);
+$('#vRot').addEventListener('click', rotatePlan);
+$('#doneReset').addEventListener('click', function(){ state.done = {}; store(); updateDoneUI(); });
 $('#preview').addEventListener('click', openViewer);
 $('#vClose').addEventListener('click', closeViewer);
 $('#vIn').addEventListener('click', function(){ var c = $('#viewCanvas'); zoomAt(c.clientWidth / 2, c.clientHeight / 2, 1.5); });
@@ -1026,6 +1146,7 @@ $('#bCkOk').addEventListener('click', checkValidate);
 $('#bCkNext').addEventListener('click', checkNext);
 $('#bCkBack').addEventListener('click', checkBack);
 $('#bCkMirror').addEventListener('click', toggleMirror);
+$('#bDone').addEventListener('click', markDone);
 $('#bNext').addEventListener('click', function(){ step(1); });
 $('#bPrev').addEventListener('click', function(){ step(-1); });
 $('#bNear').addEventListener('click', function(){
@@ -1042,7 +1163,10 @@ try{ saved = JSON.parse(localStorage.getItem(STORE) || 'null'); }catch(e){}
 $('#plan').value = saved && saved.text ? saved.text : EXAMPLE;
 if(saved && saved.unit) $('#unit').value = saved.unit;
 if(saved && saved.o === false){ state.originOn = false; $('#origin').checked = false; }
+if(saved && saved.r) state.rot = (parseInt(saved.r, 10) || 0) % 4;
+if(saved && saved.d && saved.d.forEach) saved.d.forEach(function(k){ state.done[k] = 1; });
 reparse(saved ? saved.a : '', saved ? saved.b : '');
+updateDoneUI();
 checkAR();
 if(document.fonts && document.fonts.ready) document.fonts.ready.then(drawPreview);
 })();
