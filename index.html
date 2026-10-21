@@ -178,6 +178,7 @@ input,select,textarea{font-size:16px}
       <li>Touchez Fait une fois un point marqué au sol : il passe en bleu, ici comme sur le plan.</li>
       <li>Précision attendue : 1 à 3 cm. Une pièce bien éclairée avec des textures au sol aide le suivi.</li>
       <li>Si le sol semble avoir glissé, utilisez Recaler sur vos deux repères.</li>
+      <li>Pendant le contrôle, Pivoter 90° tourne le plan dans la caméra autour du repère A, par quart de tour.</li>
       <li>Contrôler : l'application choisit un troisième point hors de la ligne A–B. Posez le réticule dessus pour mesurer l'écart en cm, et savoir si le plan est inversé.</li>
     </ul>
   </section>
@@ -223,6 +224,7 @@ input,select,textarea{font-size:16px}
       <button id="bCkOk" class="hb main" type="button">Valider le point</button>
       <button id="bCkNext" class="hb" type="button">Autre point</button>
       <button id="bCkMirror" class="hb" type="button" hidden>Inverser le plan</button>
+      <button id="bCkRot" class="hb" type="button">Pivoter 90°</button>
       <button id="bCkBack" class="hb" type="button">Retour</button>
     </div>
     <div id="grpTrace" class="btns" hidden>
@@ -740,7 +742,7 @@ function renderTrace(){
   setText($('#hudSub'), 'Touchez Fait une fois le point marqué : il passe en bleu.');
   var g = $('#hudGap'), mm = Math.round(AR.T.gap * 1000);
   g.hidden = false; g.className = AR.T.gap > 0.02 ? 'warn' : 'ok';
-  g.textContent = 'Écart de calage : ' + mm + ' mm sur ' + fmtDist(AR.T.planDist) + (AR.T.gap > 0.02 ? ' · précision réduite, utilisez Recaler.' : '') + (AR.mirror ? ' · plan inversé' : '');
+  g.textContent = 'Écart de calage : ' + mm + ' mm sur ' + fmtDist(AR.T.planDist) + (AR.T.gap > 0.02 ? ' · précision réduite, utilisez Recaler.' : '') + (AR.mirror ? ' · plan inversé' : '') + (AR.rot ? ' · plan pivoté de ' + AR.rot * 90 + '°' : '');
 }
 function toast(msg){
   var t = $('#toast'); t.textContent = msg; t.hidden = false;
@@ -758,7 +760,7 @@ function validateCalage(){
   var T = fitTransform(state.points[state.refA], state.points[state.refB], { X: a.X, Z: a.Z }, { X: b.X, Z: b.Z }, AR.mirror);
   if(!T){ toast('Les deux repères sont trop proches. Recommencez.'); AR.step = 0; AR.refs = [null, null]; renderCalage(); return; }
   AR.T = T; AR.floorY = (a.Y + b.Y) / 2;
-  AR.world = state.points.map(function(p){ return applyTransform(T, p.x, p.y); });
+  rebuildWorld();
   AR.target = nextUndone(-1); AR.nearest = false; $('#bNear').setAttribute('aria-pressed', 'false');
   renderTrace();
 }
@@ -850,7 +852,7 @@ function startCheck(){
 function renderCheck(){
   AR.phase = 'check'; AR.check.M = null;
   $('#grpCalage').hidden = true; $('#grpTrace').hidden = true; $('#grpCheck').hidden = false; $('#guide').hidden = false;
-  $('#bCkMirror').hidden = true; $('#bCkNext').hidden = AR.check.list.length < 2;
+  $('#bCkMirror').hidden = true; $('#bCkRot').className = 'hb'; $('#bCkNext').hidden = AR.check.list.length < 2;
   setText($('#hudMsg'), 'Contrôle : allez sur le point ' + lab(AR.target));
   setText($('#hudSub'), 'Posez le réticule sur ce repère connu au sol, puis touchez Valider le point.');
   $('#hudGap').hidden = true;
@@ -861,21 +863,41 @@ function checkBack(){
   if(c && c.prev != null && AR.world[c.prev]) AR.target = c.prev;
   renderTrace();
 }
+// Pivot du plan dans la caméra par quarts de tour (sens horaire vu de dessus) autour du repère A
+function worldPoint(T, rot, x, y){
+  var w = applyTransform(T, x, y); if(!rot) return w;
+  var pA = state.points[state.refA], o = applyTransform(T, pA.x, pA.y);
+  var ang = rot * Math.PI / 2, c = Math.cos(ang), s = Math.sin(ang), dx = w.X - o.X, dz = w.Z - o.Z;
+  return { X: o.X + c * dx - s * dz, Z: o.Z + s * dx + c * dz };
+}
+function rebuildWorld(){ AR.world = state.points.map(function(q){ return worldPoint(AR.T, AR.rot, q.x, q.y); }); }
+function fitMirror(mir){ var a = AR.refs[0], b = AR.refs[1]; return fitTransform(state.points[state.refA], state.points[state.refB], { X: a.X, Z: a.Z }, { X: b.X, Z: b.Z }, mir); }
+function rotatePlanAR(){
+  AR.rot = (AR.rot + 1) % 4; rebuildWorld();
+  toast(AR.rot ? 'Plan pivoté de ' + AR.rot * 90 + '° autour du repère A.' : 'Plan revenu à son orientation de calage.');
+  if(AR.check && AR.check.M) evalCheck();
+}
 function evalCheck(){
   var c = AR.check, i = AR.target, p = state.points[i], M = c.M, P = AR.world[i];
   var err = Math.hypot(M.X - P.X, M.Z - P.Z), a = AR.refs[0], b = AR.refs[1];
-  var T2 = fitTransform(state.points[state.refA], state.points[state.refB], { X: a.X, Z: a.Z }, { X: b.X, Z: b.Z }, !AR.mirror);
-  var P2 = T2 ? applyTransform(T2, p.x, p.y) : null;
+  var T2 = fitMirror(!AR.mirror);
+  var P2 = T2 ? worldPoint(T2, AR.rot, p.x, p.y) : null;
   var err2 = P2 ? Math.hypot(M.X - P2.X, M.Z - P2.Z) : Infinity;
   var v = checkVerdict(err, err2), g = $('#hudGap'), msg, cls = 'warn';
+  // Une autre orientation par quart de tour colle-t-elle bien mieux au point mesuré ?
+  var bestR = -1, errR = Infinity;
+  for(var k = 1; k < 4; k++){ var r = (AR.rot + k) % 4, Q = worldPoint(AR.T, r, p.x, p.y), e = Math.hypot(M.X - Q.X, M.Z - Q.Z); if(e < errR){ errR = e; bestR = r; } }
+  if(v !== 'ok' && v !== 'limite' && errR <= 0.10 && errR < 0.35 * err && errR < err2) v = 'rotation';
   if(v === 'ok'){ msg = 'Calage vérifié sur ' + lab(i) + ' : écart ' + fmtDist(err) + '.'; cls = 'ok'; }
   else if(v === 'limite') msg = 'Écart de ' + fmtDist(err) + ' sur ' + lab(i) + ' : limite acceptable.';
+  else if(v === 'rotation') msg = 'Plan probablement tourné : écart de ' + fmtDist(err) + ', qui tomberait à ' + fmtDist(errR) + ' en pivotant à ' + bestR * 90 + '°. Touchez Pivoter 90°.';
   else if(v === 'miroir') msg = 'Plan probablement inversé (miroir) : écart de ' + fmtDist(err) + ', qui tomberait à ' + fmtDist(err2) + ' une fois le plan inversé.';
   else msg = 'Écart de ' + fmtDist(err) + ' sur ' + lab(i) + ' alors que A–B est bon. Vérifiez l\'unité, l\'échelle et la pose des repères, puis Recaler.';
   g.hidden = false; g.className = cls; g.textContent = msg;
   setText($('#hudMsg'), 'Contrôle sur ' + lab(i));
   var mb = $('#bCkMirror'); mb.hidden = !(v === 'miroir' || v === 'ecart'); mb.textContent = AR.mirror ? 'Rétablir le plan' : 'Inverser le plan';
   mb.className = 'hb' + (v === 'miroir' ? ' main' : '');
+  $('#bCkRot').className = 'hb' + (v === 'rotation' ? ' main' : '');
 }
 function checkValidate(){
   if(!AR.reticle){ toast('Aucun sol détecté. Bougez doucement le téléphone en visant le sol.'); return; }
@@ -883,11 +905,9 @@ function checkValidate(){
   evalCheck();
 }
 function toggleMirror(){
-  var a = AR.refs[0], b = AR.refs[1];
-  var T = fitTransform(state.points[state.refA], state.points[state.refB], { X: a.X, Z: a.Z }, { X: b.X, Z: b.Z }, !AR.mirror);
+  var T = fitMirror(!AR.mirror);
   if(!T) return;
-  AR.mirror = !AR.mirror; AR.T = T;
-  AR.world = state.points.map(function(q){ return applyTransform(T, q.x, q.y); });
+  AR.mirror = !AR.mirror; AR.T = T; rebuildWorld();
   if(AR.check && AR.check.M) evalCheck();
 }
 
@@ -949,7 +969,7 @@ async function startAR(){
   btn.disabled = true;
   try{
     initGL();
-    AR.refs = [null, null]; AR.step = 0; AR.T = null; AR.world = []; AR.reticle = null; AR.mirror = false; AR.check = null; AR.drag = null; AR.lastFrame = null;
+    AR.refs = [null, null]; AR.step = 0; AR.T = null; AR.world = []; AR.reticle = null; AR.mirror = false; AR.rot = 0; AR.check = null; AR.drag = null; AR.lastFrame = null;
     $('#overlay').hidden = false; renderCalage();
     var session = await navigator.xr.requestSession('immersive-ar', {
       requiredFeatures: ['hit-test'], optionalFeatures: ['dom-overlay'], domOverlay: { root: $('#overlay') }
@@ -1146,6 +1166,7 @@ $('#bCkOk').addEventListener('click', checkValidate);
 $('#bCkNext').addEventListener('click', checkNext);
 $('#bCkBack').addEventListener('click', checkBack);
 $('#bCkMirror').addEventListener('click', toggleMirror);
+$('#bCkRot').addEventListener('click', rotatePlanAR);
 $('#bDone').addEventListener('click', markDone);
 $('#bNext').addEventListener('click', function(){ step(1); });
 $('#bPrev').addEventListener('click', function(){ step(-1); });
