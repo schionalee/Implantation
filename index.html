@@ -122,7 +122,7 @@ input,select,textarea{font-size:16px}
 
   <section aria-labelledby="h-plan">
     <h2 id="h-plan"><span class="n">01</span>Votre plan</h2>
-    <p class="hint">Une ligne par point : <b>nom ; x ; y</b> (virgule ou point pour les décimales). Importez aussi un fichier CSV, TXT, DXF (points, cercles et blocs) ou PDF (points rouges).</p>
+    <p class="hint">Une ligne par point : <b>nom ; x ; y</b> (virgule ou point pour les décimales). Importez aussi un fichier CSV, TXT, DXF ou PDF : les points sont reconnus par leur forme (symbole, cercle, point), quelle que soit leur couleur.</p>
     <div class="field">
       <label for="plan">Points du plan</label>
       <textarea id="plan" spellcheck="false" autocapitalize="off" autocomplete="off"></textarea>
@@ -143,12 +143,13 @@ input,select,textarea{font-size:16px}
     </div>
     <div id="dxfBox" class="row" hidden>
       <div class="field">
-        <label for="dxfColor">Couleur à garder (DXF)</label>
-        <select id="dxfColor"></select>
+        <label for="dxfShape">Forme des points (DXF)</label>
+        <select id="dxfShape"></select>
       </div>
     </div>
     <div id="pdfBox" class="row" hidden>
       <div class="field"><label for="pdfPage">Page du PDF</label><input id="pdfPage" type="number" min="1" value="1" inputmode="numeric"></div>
+      <div class="field"><label for="pdfShape">Forme des points (PDF)</label><select id="pdfShape"><option value="quarters">Symboles cercle à quarts</option><option value="discs">Pastilles pleines</option></select></div>
       <div class="field"><label for="pdfScale">Échelle du plan, 1 /</label><input id="pdfScale" type="number" min="1" step="any" value="100" inputmode="decimal"></div>
       <div class="field"><label for="pdfReal">Distance réelle A–B (m), facultatif</label><input id="pdfReal" type="text" inputmode="decimal" placeholder="ex. 6,45" autocomplete="off"></div>
     </div>
@@ -299,6 +300,7 @@ function parseDXFRaw(text){
       else if(code === 62) cur.aci = parseInt(val, 10);
       else if(code === 420) cur.rgb = parseInt(val, 10);
       else if(code === 2 && cur.type === 'INSERT') cur.block = val;
+      else if(code === 40 && cur.type === 'CIRCLE') cur.r = parseFloat(val);
     }
   }
   flush();
@@ -345,20 +347,22 @@ function fmtDist(m){
   function nf(v, d){ return v.toFixed(d).replace('.', ','); }
   return m < 1 ? nf(m * 100, 1) + ' cm' : nf(m, 2) + ' m';
 }
-function detectRed(data, w, h){
+// Reconnaissance par la forme, quelle que soit la couleur : symbole cercle à quarts pleins et vides, ou pastille pleine
+function detectShapes(data, w, h){
   var n = w * h, mask = new Uint8Array(n), i, o;
   for(i = 0, o = 0; i < n; i++, o += 4){
-    var r = data[o], g = data[o + 1], b = data[o + 2];
-    if(r >= 150 && g <= 110 && b <= 110 && r - g >= 70 && r - b >= 70) mask[i] = 1;
+    var r = data[o], g = data[o + 1], b = data[o + 2], lum = 0.299 * r + 0.587 * g + 0.114 * b;
+    var sat = Math.max(r, g, b) - Math.min(r, g, b);
+    if(lum < 170 || (sat > 80 && lum < 235)) mask[i] = 1;
   }
-  var seen = new Uint8Array(n), stack = new Int32Array(n), out = [], comps = [], maxSide = Math.max(w, h) * 0.04;
+  var seen = new Uint8Array(n), stack = new Int32Array(n), maxSide = Math.max(w, h) * 0.04, comps = [];
   for(var s = 0; s < n; s++){
     if(!mask[s] || seen[s]) continue;
-    var sp = 0, area = 0, sx = 0, sy = 0, x0 = w, x1 = 0, y0 = h, y1 = 0;
+    var sp = 0, area = 0, x0 = w, x1 = 0, y0 = h, y1 = 0, big = false;
     stack[sp++] = s; seen[s] = 1;
     while(sp){
       var q = stack[--sp], px = q % w, py = (q - px) / w;
-      area++; sx += px; sy += py;
+      area++;
       if(px < x0) x0 = px; if(px > x1) x1 = px; if(py < y0) y0 = py; if(py > y1) y1 = py;
       for(var dy = -1; dy <= 1; dy++){
         var ny = py + dy; if(ny < 0 || ny >= h) continue;
@@ -369,34 +373,43 @@ function detectRed(data, w, h){
         }
       }
     }
-    if(area >= 3) comps.push({ area: area, sx: sx, sy: sy, x0: x0, x1: x1, y0: y0, y1: y1, n: 1 });
+    if(x1 - x0 > maxSide || y1 - y0 > maxSide) continue;
+    if(area >= 3) comps.push({ x0: x0, x1: x1, y0: y0, y1: y1 });
   }
-  // Un symbole de repère (cercle à quarts pleins et vides) donne plusieurs taches qui se touchent par un coin :
-  // on les regroupe en un seul point, au centre du symbole
+  // quarts qui ne se touchent que par la pointe : on regroupe les taches collées
   var merged = true;
   while(merged){
     merged = false;
-    for(var i = 0; i < comps.length; i++){
-      var A = comps[i]; if(!A) continue;
-      for(var j = i + 1; j < comps.length; j++){
-        var B = comps[j]; if(!B) continue;
-        var pad = Math.max(2, 0.08 * Math.max(A.x1 - A.x0, A.y1 - A.y0, B.x1 - B.x0, B.y1 - B.y0));
-        if(B.x0 > A.x1 + pad || A.x0 > B.x1 + pad || B.y0 > A.y1 + pad || A.y0 > B.y1 + pad) continue;
-        A.area += B.area; A.sx += B.sx; A.sy += B.sy; A.n += B.n;
+    for(var a = 0; a < comps.length; a++){
+      var A = comps[a]; if(!A) continue;
+      for(var bI = a + 1; bI < comps.length; bI++){
+        var B = comps[bI]; if(!B) continue;
+        if(B.x0 > A.x1 + 1 || A.x0 > B.x1 + 1 || B.y0 > A.y1 + 1 || A.y0 > B.y1 + 1) continue;
         A.x0 = Math.min(A.x0, B.x0); A.x1 = Math.max(A.x1, B.x1); A.y0 = Math.min(A.y0, B.y0); A.y1 = Math.max(A.y1, B.y1);
-        comps[j] = null; merged = true;
+        comps[bI] = null; merged = true;
       }
     }
   }
+  var quarters = [], discs = [];
   comps.forEach(function(C){
     if(!C) return;
     var bw = C.x1 - C.x0 + 1, bh = C.y1 - C.y0 + 1, asp = bw / bh;
-    if(C.area < 5 || bw > maxSide || bh > maxSide || asp < 0.4 || asp > 2.5) return;
-    // plusieurs quarts : centre du cadre (le centre du cercle) ; une seule tache pleine : son barycentre
-    if(C.n > 1) out.push({ x: (C.x0 + C.x1 + 1) / 2, y: (C.y0 + C.y1 + 1) / 2, area: C.area });
-    else out.push({ x: C.sx / C.area + 0.5, y: C.sy / C.area + 0.5, area: C.area });
+    if(bw < 6 || bh < 6 || bw > maxSide || bh > maxSide || asp < 0.8 || asp > 1.25) return;
+    var cx = (C.x0 + C.x1 + 1) / 2, cy = (C.y0 + C.y1 + 1) / 2, R = (bw + bh) / 4, tot = [0, 0, 0, 0], ink = [0, 0, 0, 0];
+    for(var y = C.y0; y <= C.y1; y++) for(var x = C.x0; x <= C.x1; x++){
+      var ddx = x + 0.5 - cx, ddy = y + 0.5 - cy, d = Math.hypot(ddx, ddy);
+      if(d < 0.15 * R || d > 0.75 * R) continue;
+      var k = ddx >= 0 ? (ddy < 0 ? 0 : 3) : (ddy < 0 ? 1 : 2); // 0 haut-droite, 1 haut-gauche, 2 bas-gauche, 3 bas-droite
+      tot[k]++; if(mask[y * w + x]) ink[k]++;
+    }
+    if(tot.some(function(t){ return !t; })) return;
+    var f = ink.map(function(v, k){ return v / tot[k]; });
+    var full = function(v){ return v > 0.6; }, empty = function(v){ return v < 0.3; };
+    var pt = { x: cx, y: cy };
+    if((full(f[0]) && full(f[2]) && empty(f[1]) && empty(f[3])) || (full(f[1]) && full(f[3]) && empty(f[0]) && empty(f[2]))) quarters.push(pt);
+    else if(f.every(full)) discs.push(pt);
   });
-  return out;
+  return { quarters: quarters, discs: discs };
 }
 // Points PDF (pt, origine en bas à gauche) triés de haut en bas puis de gauche à droite
 function sortPdfPoints(pts, H){
@@ -1130,41 +1143,36 @@ async function checkAR(){
   updateStart();
 }
 
-/* ---------- Import DXF : filtre par couleur ---------- */
-var ACI_NAMES = { 1: 'Rouge', 2: 'Jaune', 3: 'Vert', 4: 'Cyan', 5: 'Bleu', 6: 'Magenta', 7: 'Blanc / noir' };
-function colorName(k){ return isNaN(+k) ? 'Couleur ' + k.replace('rgb:', '#') : (ACI_NAMES[+k] || 'Couleur ' + k); }
-function buildDxfColors(){
-  var sel = $('#dxfColor'), cnt = {}, order = [];
-  state.dxf.forEach(function(e){ var k = String(e.color); if(!(k in cnt)){ cnt[k] = 0; order.push(k); } cnt[k]++; });
-  order.sort(function(a, b){ return cnt[b] - cnt[a]; });
+/* ---------- Import DXF : choix par forme (bloc, cercle, point), la couleur n'est pas prise en compte ---------- */
+function shapeKey(e){
+  if(e.type === 'INSERT') return e.block ? 'b:' + e.block : null;
+  if(e.type === 'CIRCLE') return isFinite(e.r) ? 'c:' + (+e.r.toPrecision(3)) : null;
+  if(e.type === 'POINT') return 'p';
+  return null;
+}
+function shapeName(k){
+  if(k.indexOf('b:') === 0) return 'Symbole (bloc) « ' + k.slice(2) + ' »';
+  if(k.indexOf('c:') === 0) return 'Cercles de rayon ' + k.slice(2).replace('.', ',');
+  return 'Points';
+}
+function buildDxfShapes(){
+  var sel = $('#dxfShape'), cnt = {}, order = [];
+  state.dxf.forEach(function(e){ var k = shapeKey(e); if(!k) return; if(!(k in cnt)){ cnt[k] = 0; order.push(k); } cnt[k]++; });
+  // les symboles (blocs) d'abord, puis les cercles et les points, du plus fréquent au moins fréquent
+  function rank(k){ return k.indexOf('b:') === 0 ? 0 : k.indexOf('c:') === 0 ? 1 : 2; }
+  order.sort(function(a, b){ return rank(a) - rank(b) || cnt[b] - cnt[a]; });
   sel.innerHTML = '';
-  var all = document.createElement('option'); all.value = 'all'; all.textContent = 'Toutes les couleurs (' + state.dxf.length + ')'; sel.appendChild(all);
-  // Un même symbole (bloc) peut être posé dans plusieurs couleurs ou calques : on propose aussi chaque bloc toutes couleurs confondues
-  var ab = {}, abo = [];
-  state.dxf.forEach(function(e){ if(e.type !== 'INSERT' || !e.block) return; if(!(e.block in ab)){ ab[e.block] = 0; abo.push(e.block); } ab[e.block]++; });
-  abo.sort(function(a, b){ return ab[b] - ab[a]; });
-  abo.forEach(function(b){ var q = document.createElement('option'); q.value = '*\u2020' + b; q.textContent = 'Bloc \u00ab ' + b + ' \u00bb \u00b7 toutes couleurs (' + ab[b] + ')'; sel.appendChild(q); });
-  order.forEach(function(k){
-    var o = document.createElement('option'); o.value = k; o.textContent = colorName(k) + ' (' + cnt[k] + ')'; sel.appendChild(o);
-    var bc = {}, bo = [];
-    state.dxf.forEach(function(e){ if(String(e.color) !== k || e.type !== 'INSERT' || !e.block) return; if(!(e.block in bc)){ bc[e.block] = 0; bo.push(e.block); } bc[e.block]++; });
-    bo.sort(function(a, b){ return bc[b] - bc[a]; });
-    bo.forEach(function(b){ var q = document.createElement('option'); q.value = k + '\u2020' + b; q.textContent = '   \u21b3 ' + colorName(k) + ' \u00b7 centre du bloc \u00ab ' + b + ' \u00bb (' + bc[b] + ')'; sel.appendChild(q); });
-  });
-  sel.value = cnt['1'] ? '1' : 'all';
-  if(cnt['1']){ var re = Array.prototype.filter.call(sel.options, function(o){ return o.value.indexOf('1\u2020') === 0; })[0]; if(re) sel.value = re.value; }
-  // Par défaut : le bloc le plus posé du plan (souvent le symbole des points à implanter), s'il l'est au moins 5 fois
-  if(abo.length && ab[abo[0]] >= 5) sel.value = '*\u2020' + abo[0];
+  order.forEach(function(k){ var o = document.createElement('option'); o.value = k; o.textContent = shapeName(k) + ' (' + cnt[k] + ')'; sel.appendChild(o); });
+  var all = document.createElement('option'); all.value = 'all'; all.textContent = 'Toutes les formes (' + state.dxf.length + ')'; sel.appendChild(all);
+  // Par défaut : le symbole le plus posé du plan (souvent celui des points à implanter), sinon la forme la plus fréquente
+  var blocks = order.filter(function(k){ return rank(k) === 0; });
+  sel.value = blocks.length && cnt[blocks[0]] >= 5 ? blocks[0] : (order.slice().sort(function(a, b){ return cnt[b] - cnt[a]; })[0] || 'all');
   $('#dxfBox').hidden = !state.dxf.length;
 }
 function applyDxf(){
-  var v = $('#dxfColor').value, seen = {}, lines = [], n = 0;
+  var v = $('#dxfShape').value, seen = {}, lines = [], n = 0;
   (state.dxf || []).forEach(function(e){
-    if(v !== 'all'){
-      var cut = v.indexOf('\u2020');
-      if(cut >= 0){ var vc = v.slice(0, cut); if((vc !== '*' && String(e.color) !== vc) || e.type !== 'INSERT' || e.block !== v.slice(cut + 1)) return; }
-      else if(String(e.color) !== v) return;
-    }
+    if(v !== 'all' && shapeKey(e) !== v) return;
     var key = e.x.toFixed(4) + '|' + e.y.toFixed(4);
     if(seen[key]) return; seen[key] = 1;
     n++; lines.push('P' + n + ' ; ' + (+e.x.toFixed(4)) + ' ; ' + (+e.y.toFixed(4)));
@@ -1176,7 +1184,7 @@ function applyDxf(){
   else info.textContent += ' · DXF : vérifiez l\'unité choisie (souvent des mm ou des cm).';
 }
 
-/* ---------- Import PDF : points rouges ---------- */
+/* ---------- Import PDF : symboles reconnus par leur forme ---------- */
 var PT_M = 0.0254 / 72; // 1 point PDF en mètres sur le papier
 function pdfMsg(t, cls){ var i = $('#planInfo'); i.textContent = t; i.className = 'status' + (cls ? ' ' + cls : ''); }
 function importPdf(f){
@@ -1195,7 +1203,7 @@ function importPdf(f){
   rd.readAsArrayBuffer(f);
 }
 function scanPdfPage(n){
-  pdfMsg('Recherche des points rouges…');
+  pdfMsg('Recherche des symboles…');
   return state.pdfDoc.getPage(n).then(function(page){
     var v1 = page.getViewport({ scale: 1 }), W = v1.width, H = v1.height;
     var sc = Math.min(3200 / Math.max(W, H), Math.sqrt(7e6 / (W * H)));
@@ -1205,19 +1213,26 @@ function scanPdfPage(n){
     cx.fillStyle = '#fff'; cx.fillRect(0, 0, cv.width, cv.height);
     return page.render({ canvasContext: cx, viewport: vp }).promise.then(function(){
       var img = cx.getImageData(0, 0, cv.width, cv.height);
-      var blobs = detectRed(img.data, cv.width, cv.height);
+      var found = detectShapes(img.data, cv.width, cv.height);
       var kx = W / cv.width, ky = H / cv.height;
-      var pts = sortPdfPoints(blobs.map(function(b){ return { x: b.x * kx, y: H - b.y * ky }; }), H);
+      function toPdf(list){ return sortPdfPoints(list.map(function(b){ return { x: b.x * kx, y: H - b.y * ky }; }), H); }
+      var sets = { quarters: toPdf(found.quarters), discs: toPdf(found.discs) };
+      var ps = $('#pdfShape');
+      ps.options[0].textContent = 'Symboles cercle à quarts (' + sets.quarters.length + ')';
+      ps.options[1].textContent = 'Pastilles pleines (' + sets.discs.length + ')';
+      ps.value = sets.quarters.length || !sets.discs.length ? 'quarters' : 'discs';
+      var pts = sets[ps.value];
       var th = document.createElement('canvas'), ts = Math.min(1, 3200 / Math.max(cv.width, cv.height));
       th.width = Math.max(1, Math.round(cv.width * ts)); th.height = Math.max(1, Math.round(cv.height * ts));
       th.getContext('2d').drawImage(cv, 0, 0, th.width, th.height);
-      state.pdf = { W: W, H: H, pts: pts, thumb: th };
+      state.pdf = { W: W, H: H, pts: pts, sets: sets, thumb: th };
       applyPdf();
     });
   }).catch(function(e){ pdfMsg('Analyse impossible' + (e && e.message ? ' (' + e.message + ')' : '') + '.', 'warn'); });
 }
 function applyPdf(){
   var P = state.pdf; if(!P) return;
+  P.pts = P.sets[$('#pdfShape').value] || [];
   var N = parseFloat($('#pdfScale').value); if(!(N > 0)) N = 100;
   var k = PT_M * N, note = '';
   var real = toNum($('#pdfReal').value);
@@ -1231,8 +1246,8 @@ function applyPdf(){
   state.bg = { canvas: P.thumb, w: P.W * k, h: P.H * k };
   reparse(nameOf(state.refA), nameOf(state.refB));
   var info = $('#planInfo');
-  if(!P.pts.length){ info.textContent = 'Aucun point rouge détecté sur la page ' + $('#pdfPage').value + '. Les repères doivent être rouge vif ; sinon importez un DXF.'; info.className = 'status warn'; }
-  else { info.textContent = P.pts.length + ' point(s) rouge(s) détecté(s) sur la page ' + $('#pdfPage').value + ' · plan ' + fmtDist(P.W * k) + ' × ' + fmtDist(P.H * k) + note; info.className = 'status ok'; }
+  if(!P.pts.length){ info.textContent = 'Aucun symbole de cette forme sur la page ' + $('#pdfPage').value + '. Essayez l\'autre forme, ou importez le DXF.'; info.className = 'status warn'; }
+  else { info.textContent = P.pts.length + ' point(s) reconnu(s) par leur forme sur la page ' + $('#pdfPage').value + ' · plan ' + fmtDist(P.W * k) + ' × ' + fmtDist(P.H * k) + note; info.className = 'status ok'; }
 }
 
 /* ---------- Branchements ---------- */
@@ -1250,15 +1265,16 @@ $('#file').addEventListener('change', function(ev){
     var txt = String(rd.result);
     if(/\.dxf$/i.test(f.name) || /^\s*0\s*\r?\n\s*SECTION/.test(txt)){
       state.dxf = parseDXFRaw(txt);
-      buildDxfColors();
+      buildDxfShapes();
       applyDxf();
     } else { state.dxf = null; $('#dxfBox').hidden = true; $('#plan').value = txt; reparse('', ''); }
     store();
   };
   rd.readAsText(f);
 });
-$('#dxfColor').addEventListener('change', function(){ applyDxf(); store(); });
+$('#dxfShape').addEventListener('change', function(){ applyDxf(); store(); });
 $('#origin').addEventListener('change', function(){ state.originOn = this.checked; relabel(); drawPreview(); store(); });
+$('#pdfShape').addEventListener('change', function(){ applyPdf(); store(); });
 $('#pdfPage').addEventListener('change', function(){
   if(!state.pdfDoc) return;
   var n = Math.min(Math.max(parseInt(this.value, 10) || 1, 1), state.pdfDoc.numPages); this.value = n; scanPdfPage(n);
