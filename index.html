@@ -664,12 +664,13 @@ function drawScene(P, V){
     AR.world.forEach(function(w, i){
       var isT = i === AR.target, isRef = i === state.refA || i === state.refB;
       var c = isDone(i) ? COL.done : isRef ? COL.ref : COL.pink;
-      drawMesh(M.disc, w.X, y, w.Z, 0.012, 1, 0.012, c);
-      drawMesh(M.ring, w.X, y, w.Z, 0.03, 1, 0.03, COL.white);
-      drawMesh(M.cross, w.X, y, w.Z, 0.05, 1, 0.05, c);
+      var wy = w.Y + 0.003;
+      drawMesh(M.disc, w.X, wy, w.Z, 0.012, 1, 0.012, c);
+      drawMesh(M.ring, w.X, wy, w.Z, 0.03, 1, 0.03, COL.white);
+      drawMesh(M.cross, w.X, wy, w.Z, 0.05, 1, 0.05, c);
       if(isT){
-        drawMesh(M.ring, w.X, y + 0.001, w.Z, 0.07, 1, 0.07, COL.target);
-        drawMesh(M.pole, w.X, y, w.Z, 0.014, 0.4, 0.014, COL.target);
+        drawMesh(M.ring, w.X, wy + 0.001, w.Z, 0.07, 1, 0.07, COL.target);
+        drawMesh(M.pole, w.X, wy, w.Z, 0.014, 0.4, 0.014, COL.target);
       }
     });
   }
@@ -695,7 +696,7 @@ function updateLabels(P, V, base){
   if(AR.phase !== 'calage'){
     var order = AR.world.map(function(w, i){ return { i: i, d: Math.hypot(w.X - base.X, w.Z - base.Z) }; }).sort(function(a, b){ return a.d - b.d; }).slice(0, 8).map(function(o){ return o.i; });
     if(order.indexOf(AR.target) < 0) order.push(AR.target);
-    items = order.map(function(i){ var w = AR.world[i]; return { X: w.X, Y: AR.floorY, Z: w.Z, t: lab(i), c: i === AR.target ? ' t' : isDone(i) ? ' d' : '' }; });
+    items = order.map(function(i){ var w = AR.world[i]; return { X: w.X, Y: w.Y, Z: w.Z, t: lab(i), c: i === AR.target ? ' t' : isDone(i) ? ' d' : '' }; });
   } else {
     AR.refs.forEach(function(r, k){ if(r) items.push({ X: r.X, Y: r.Y, Z: r.Z, t: (k ? 'B' : 'A') + ' · ' + lab(k ? state.refB : state.refA), c: ' r' }); });
   }
@@ -736,10 +737,14 @@ function renderCalage(){
 function renderTrace(){
   AR.phase = 'trace';
   $('#grpCalage').hidden = true; $('#grpTrace').hidden = false; $('#grpCheck').hidden = true; $('#guide').hidden = false;
-  $('#drag').classList.remove('on'); AR.drag = null;
+  AR.drag = null;
   updateDoneBtn();
   setText($('#hudMsg'), 'Suivez le point, marquez le sol sous le réticule.');
-  setText($('#hudSub'), 'Touchez Fait une fois le point marqué : il passe en bleu.');
+  setText($('#hudSub'), 'Touchez Fait une fois le point marqué : il passe en bleu. Glissez A ou B pour les recaler sur leur marque.');
+  $('#drag').classList.add('on');
+  updateGapText();
+}
+function updateGapText(){
   var g = $('#hudGap'), mm = Math.round((AR.T.measDist - AR.T.planDist) * 1000), pc = Math.abs(AR.T.k - 1) * 100, big = pc > 3;
   g.hidden = false; g.className = big ? 'warn' : 'ok';
   g.textContent = 'Repères gardés tels que mesurés · A–B ' + fmtDist(AR.T.measDist) + ' au sol pour ' + fmtDist(AR.T.planDist) + ' sur le plan (' + (mm > 0 ? '+' : '') + mm + ' mm), points étalonnés à ' + (AR.T.k * 100).toFixed(1).replace('.', ',') + ' %' + (big ? ' · écart important : vérifiez l\'unité, l\'échelle ou les repères.' : '') + (AR.mirror ? ' · plan inversé' : '') + (AR.rot ? ' · plan pivoté de ' + AR.rot * 90 + '°' : '');
@@ -752,21 +757,22 @@ function place(){
   if(AR.step === 2){ validateCalage(); return; }
   if(!AR.reticle){ toast('Aucun sol détecté. Bougez doucement le téléphone en visant le sol.'); return; }
   AR.refs[AR.step] = { X: AR.reticle.X, Y: AR.reticle.Y, Z: AR.reticle.Z };
+  requestAnchor(AR.step);
   AR.step++; renderCalage();
   if(AR.step === 1) toast('Repère A placé. Glissez-le du doigt pour l\'ajuster.');
 }
 function validateCalage(){
   var a = AR.refs[0], b = AR.refs[1];
   var T = fitTransform(state.points[state.refA], state.points[state.refB], { X: a.X, Z: a.Z }, { X: b.X, Z: b.Z }, AR.mirror);
-  if(!T){ toast('Les deux repères sont trop proches. Recommencez.'); AR.step = 0; AR.refs = [null, null]; renderCalage(); return; }
+  if(!T){ toast('Les deux repères sont trop proches. Recommencez.'); AR.step = 0; dropRefs(); renderCalage(); return; }
   AR.T = T; AR.floorY = (a.Y + b.Y) / 2;
   rebuildWorld();
   AR.target = nextUndone(-1); AR.nearest = false; $('#bNear').setAttribute('aria-pressed', 'false');
   renderTrace();
 }
 function undo(){
-  if(AR.step === 2){ AR.step = 1; AR.refs[1] = null; }
-  else if(AR.step === 1){ AR.step = 0; AR.refs = [null, null]; }
+  if(AR.step === 2){ AR.step = 1; dropRef(1); }
+  else if(AR.step === 1){ AR.step = 0; dropRefs(); }
   AR.drag = null; renderCalage();
 }
 // Premier point non traité après i (dans l'ordre du plan), sinon i lui-même
@@ -802,7 +808,7 @@ function screenToFloor(px, py, Y){
   var el = $('#drag');
   function pos(e){ var b = $('#overlay').getBoundingClientRect(); return { x: e.clientX - b.left, y: e.clientY - b.top }; }
   el.addEventListener('pointerdown', function(e){
-    var F = AR.lastFrame; if(AR.phase !== 'calage' || !F) return;
+    var F = AR.lastFrame; if(!F || AR.phase === 'check') return;
     var q = pos(e), ov = $('#overlay'), W = ov.clientWidth, H = ov.clientHeight, best = -1, bd = 80;
     AR.refs.forEach(function(r, k){
       if(!r) return;
@@ -810,7 +816,7 @@ function screenToFloor(px, py, Y){
       var d = Math.hypot((s.x * 0.5 + 0.5) * W - q.x, (0.5 - s.y * 0.5) * H - q.y);
       if(d < bd){ bd = d; best = k; }
     });
-    if(best < 0){ toast('Posez le doigt près du repère A ou B pour le déplacer.'); return; }
+    if(best < 0){ if(AR.phase === 'calage') toast('Posez le doigt près du repère A ou B pour le déplacer.'); return; }
     var r = AR.refs[best], f = screenToFloor(q.x, q.y, r.Y); if(!f) return;
     AR.drag = { k: best, id: e.pointerId, dx: r.X - f.X, dz: r.Z - f.Z };
     try{ el.setPointerCapture(e.pointerId); }catch(_){}
@@ -819,13 +825,13 @@ function screenToFloor(px, py, Y){
   el.addEventListener('pointermove', function(e){
     var D = AR.drag; if(!D || D.id !== e.pointerId) return;
     var q = pos(e), r = AR.refs[D.k], f = r && screenToFloor(q.x, q.y, r.Y);
-    if(f){ r.X = f.X + D.dx; r.Z = f.Z + D.dz; }
+    if(f){ r.X = f.X + D.dx; r.Z = f.Z + D.dz; refit(); }
     e.preventDefault();
   });
-  function up(e){ if(AR.drag && AR.drag.id === e.pointerId) AR.drag = null; }
+  function up(e){ if(AR.drag && AR.drag.id === e.pointerId){ requestAnchor(AR.drag.k); AR.drag = null; } }
   el.addEventListener('pointerup', up); el.addEventListener('pointercancel', up);
 })();
-function recal(){ AR.step = 0; AR.refs = [null, null]; AR.T = null; AR.world = []; AR.drag = null; renderCalage(); }
+function recal(){ AR.step = 0; dropRefs(); AR.T = null; AR.world = []; AR.drag = null; renderCalage(); }
 function step(d){
   AR.nearest = false; $('#bNear').setAttribute('aria-pressed', 'false');
   var n = state.points.length; AR.target = (AR.target + d + n) % n;
@@ -870,7 +876,24 @@ function worldPoint(T, rot, x, y){
   var ang = rot * Math.PI / 2, c = Math.cos(ang), s = Math.sin(ang), dx = w.X - o.X, dz = w.Z - o.Z;
   return { X: o.X + c * dx - s * dz, Z: o.Z + s * dx + c * dz };
 }
-function rebuildWorld(){ AR.world = state.points.map(function(q){ return worldPoint(AR.T, AR.rot, q.x, q.y); }); }
+// Hauteur du sol propre à chaque point, interpolée entre A et B : A et B restent posés exactement sur leur marque
+function rebuildWorld(){
+  var a = AR.refs[0], b = AR.refs[1], dx = b.X - a.X, dz = b.Z - a.Z, L2 = dx * dx + dz * dz || 1;
+  AR.world = state.points.map(function(q){
+    var w = worldPoint(AR.T, AR.rot, q.x, q.y), t = Math.min(1, Math.max(0, ((w.X - a.X) * dx + (w.Z - a.Z) * dz) / L2));
+    w.Y = a.Y + t * (b.Y - a.Y); return w;
+  });
+  AR.world[state.refA] = { X: a.X, Y: a.Y, Z: a.Z };
+  if(!AR.rot) AR.world[state.refB] = { X: b.X, Y: b.Y, Z: b.Z };
+}
+// Recalcule le plan après un déplacement des repères (glisser, ou correction de dérive par les ancres)
+function refit(){
+  if(!AR.T || !AR.refs[0] || !AR.refs[1]) return;
+  var T = fitMirror(AR.mirror); if(!T) return;
+  AR.T = T; AR.floorY = (AR.refs[0].Y + AR.refs[1].Y) / 2; rebuildWorld();
+  if(AR.phase === 'trace') updateGapText();
+  else if(AR.phase === 'check' && AR.check && AR.check.M) evalCheck();
+}
 function fitMirror(mir){ var a = AR.refs[0], b = AR.refs[1]; return fitTransform(state.points[state.refA], state.points[state.refB], { X: a.X, Z: a.Z }, { X: b.X, Z: b.Z }, mir); }
 function rotatePlanAR(){
   AR.rot = (AR.rot + 1) % 4; rebuildWorld();
@@ -911,6 +934,41 @@ function toggleMirror(){
   if(AR.check && AR.check.M) evalCheck();
 }
 
+/* ---------- Ancres : les repères suivent les corrections du suivi AR (dérive) ---------- */
+function dropRef(k){
+  var r = AR.refs[k]; AR.refs[k] = null; if(!r) return;
+  r.tok = null; if(r.anchor){ try{ r.anchor.delete(); }catch(e){} r.anchor = null; }
+}
+function dropRefs(){ dropRef(0); dropRef(1); }
+function requestAnchor(k){
+  var r = AR.refs[k]; if(!r) return;
+  if(r.anchor){ try{ r.anchor.delete(); }catch(e){} r.anchor = null; }
+  r.wantAnchor = true;
+}
+function updateAnchors(frame){
+  if(typeof frame.createAnchor !== 'function' || typeof XRRigidTransform === 'undefined') return;
+  var moved = false;
+  AR.refs.forEach(function(r){
+    if(!r) return;
+    if(r.wantAnchor){
+      r.wantAnchor = false;
+      var tok = r.tok = {};
+      try{
+        frame.createAnchor(new XRRigidTransform({ x: r.X, y: r.Y, z: r.Z }), AR.ref).then(function(an){
+          if(r.tok === tok && AR.session) r.anchor = an; else try{ an.delete(); }catch(e){}
+        }).catch(function(){});
+      }catch(e){}
+      return;
+    }
+    if(!r.anchor || (AR.drag && AR.refs[AR.drag.k] === r)) return;
+    if(frame.trackedAnchors && !frame.trackedAnchors.has(r.anchor)) return;
+    var p = frame.getPose(r.anchor.anchorSpace, AR.ref); if(!p) return;
+    var m = p.transform.matrix;
+    if(Math.abs(m[12] - r.X) + Math.abs(m[13] - r.Y) + Math.abs(m[14] - r.Z) > 0.001){ r.X = m[12]; r.Y = m[13]; r.Z = m[14]; moved = true; }
+  });
+  if(moved) refit();
+}
+
 function onFrame(t, frame){
   var s = AR.session; if(!s) return;
   s.requestAnimationFrame(onFrame);
@@ -920,6 +978,7 @@ function onFrame(t, frame){
     var hits = frame.getHitTestResults(AR.hit);
     if(hits.length){ var hp = hits[0].getPose(AR.ref); if(hp){ var m = hp.transform.matrix; AR.reticle = { X: m[12], Y: m[13], Z: m[14] }; } }
   }
+  updateAnchors(frame);
   var gl = AR.gl, layer = s.renderState.baseLayer;
   gl.bindFramebuffer(gl.FRAMEBUFFER, layer.framebuffer);
   gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
@@ -969,10 +1028,10 @@ async function startAR(){
   btn.disabled = true;
   try{
     initGL();
-    AR.refs = [null, null]; AR.step = 0; AR.T = null; AR.world = []; AR.reticle = null; AR.mirror = false; AR.rot = 0; AR.check = null; AR.drag = null; AR.lastFrame = null;
+    dropRefs(); AR.step = 0; AR.T = null; AR.world = []; AR.reticle = null; AR.mirror = false; AR.rot = 0; AR.check = null; AR.drag = null; AR.lastFrame = null;
     $('#overlay').hidden = false; renderCalage();
     var session = await navigator.xr.requestSession('immersive-ar', {
-      requiredFeatures: ['hit-test'], optionalFeatures: ['dom-overlay'], domOverlay: { root: $('#overlay') }
+      requiredFeatures: ['hit-test'], optionalFeatures: ['dom-overlay', 'anchors'], domOverlay: { root: $('#overlay') }
     });
     AR.session = session;
     session.addEventListener('end', function(){
