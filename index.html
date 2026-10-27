@@ -1139,6 +1139,11 @@ function buildDxfColors(){
   order.sort(function(a, b){ return cnt[b] - cnt[a]; });
   sel.innerHTML = '';
   var all = document.createElement('option'); all.value = 'all'; all.textContent = 'Toutes les couleurs (' + state.dxf.length + ')'; sel.appendChild(all);
+  // Un même symbole (bloc) peut être posé dans plusieurs couleurs ou calques : on propose aussi chaque bloc toutes couleurs confondues
+  var ab = {}, abo = [];
+  state.dxf.forEach(function(e){ if(e.type !== 'INSERT' || !e.block) return; if(!(e.block in ab)){ ab[e.block] = 0; abo.push(e.block); } ab[e.block]++; });
+  abo.sort(function(a, b){ return ab[b] - ab[a]; });
+  abo.forEach(function(b){ var q = document.createElement('option'); q.value = '*\u2020' + b; q.textContent = 'Bloc \u00ab ' + b + ' \u00bb \u00b7 toutes couleurs (' + ab[b] + ')'; sel.appendChild(q); });
   order.forEach(function(k){
     var o = document.createElement('option'); o.value = k; o.textContent = colorName(k) + ' (' + cnt[k] + ')'; sel.appendChild(o);
     var bc = {}, bo = [];
@@ -1148,6 +1153,8 @@ function buildDxfColors(){
   });
   sel.value = cnt['1'] ? '1' : 'all';
   if(cnt['1']){ var re = Array.prototype.filter.call(sel.options, function(o){ return o.value.indexOf('1\u2020') === 0; })[0]; if(re) sel.value = re.value; }
+  // Par défaut : le bloc le plus posé du plan (souvent le symbole des points à implanter), s'il l'est au moins 5 fois
+  if(abo.length && ab[abo[0]] >= 5) sel.value = '*\u2020' + abo[0];
   $('#dxfBox').hidden = !state.dxf.length;
 }
 function applyDxf(){
@@ -1155,7 +1162,7 @@ function applyDxf(){
   (state.dxf || []).forEach(function(e){
     if(v !== 'all'){
       var cut = v.indexOf('\u2020');
-      if(cut >= 0){ if(String(e.color) !== v.slice(0, cut) || e.type !== 'INSERT' || e.block !== v.slice(cut + 1)) return; }
+      if(cut >= 0){ var vc = v.slice(0, cut); if((vc !== '*' && String(e.color) !== vc) || e.type !== 'INSERT' || e.block !== v.slice(cut + 1)) return; }
       else if(String(e.color) !== v) return;
     }
     var key = e.x.toFixed(4) + '|' + e.y.toFixed(4);
