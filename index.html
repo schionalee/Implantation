@@ -177,7 +177,7 @@ input,select,textarea{font-size:16px}
       <li>Dans la caméra : visez le repère A, touchez Placer, faites de même pour B. Glissez un repère du doigt pour l'ajuster, puis Valider : les points apparaissent sur le sol.</li>
       <li>Touchez Fait une fois un point marqué au sol : il passe en bleu, ici comme sur le plan.</li>
       <li>Précision attendue : 1 à 3 cm. Une pièce bien éclairée avec des textures au sol aide le suivi.</li>
-      <li>Si le sol semble avoir glissé, utilisez Recaler sur vos deux repères.</li>
+      <li>Si un repère n'est plus sur sa croix, visez la croix avec le réticule et touchez Caler A/B ici : tout le plan se recale sur lui. Recaler recommence le calage complet.</li>
       <li>Pendant le contrôle, Pivoter 90° tourne le plan dans la caméra autour du repère A, par quart de tour.</li>
       <li>Contrôler : l'application choisit un troisième point hors de la ligne A–B. Posez le réticule dessus pour mesurer l'écart en cm, et savoir si le plan est inversé.</li>
     </ul>
@@ -233,6 +233,7 @@ input,select,textarea{font-size:16px}
       <button id="bNext" class="hb" type="button" aria-label="Point suivant">▶</button>
       <button id="bNear" class="hb" type="button" aria-pressed="false">Plus proche</button>
       <button id="bCheck" class="hb" type="button">Contrôler</button>
+      <button id="bSnap" class="hb" type="button">Caler A/B ici</button>
       <button id="bRecal" class="hb" type="button">Recaler</button>
       <button class="hb bExit" type="button">Quitter</button>
     </div>
@@ -740,7 +741,7 @@ function renderTrace(){
   AR.drag = null;
   updateDoneBtn();
   setText($('#hudMsg'), 'Suivez le point, marquez le sol sous le réticule.');
-  setText($('#hudSub'), 'Touchez Fait une fois le point marqué : il passe en bleu. Glissez A ou B pour les recaler sur leur marque.');
+  setText($('#hudSub'), 'Touchez Fait une fois le point marqué : il passe en bleu. Si A ou B n\'est plus sur sa croix : visez la croix et touchez Caler A/B ici.');
   $('#drag').classList.add('on');
   updateGapText();
 }
@@ -756,8 +757,7 @@ function toast(msg){
 function place(){
   if(AR.step === 2){ validateCalage(); return; }
   if(!AR.reticle){ toast('Aucun sol détecté. Bougez doucement le téléphone en visant le sol.'); return; }
-  AR.refs[AR.step] = { X: AR.reticle.X, Y: AR.reticle.Y, Z: AR.reticle.Z };
-  requestAnchor(AR.step);
+  setRefAt(AR.step, AR.reticle);
   AR.step++; renderCalage();
   if(AR.step === 1) toast('Repère A placé. Glissez-le du doigt pour l\'ajuster.');
 }
@@ -828,7 +828,7 @@ function screenToFloor(px, py, Y){
     if(f){ r.X = f.X + D.dx; r.Z = f.Z + D.dz; refit(); }
     e.preventDefault();
   });
-  function up(e){ if(AR.drag && AR.drag.id === e.pointerId){ requestAnchor(AR.drag.k); AR.drag = null; } }
+  function up(e){ if(AR.drag && AR.drag.id === e.pointerId){ var k = AR.drag.k; AR.drag = null; setRefAt(k, AR.refs[k]); refit(); } }
   el.addEventListener('pointerup', up); el.addEventListener('pointercancel', up);
 })();
 function recal(){ AR.step = 0; dropRefs(); AR.T = null; AR.world = []; AR.drag = null; renderCalage(); }
@@ -945,16 +945,50 @@ function requestAnchor(k){
   if(r.anchor){ try{ r.anchor.delete(); }catch(e){} r.anchor = null; }
   r.wantAnchor = true;
 }
-function updateAnchors(frame){
-  if(typeof frame.createAnchor !== 'function' || typeof XRRigidTransform === 'undefined') return;
+// Un repère est mémorisé avec le rayon de visée qui l'a posé : si le sol est mieux estimé ensuite,
+// on le fait glisser le long de ce rayon (il reste sous la croix vue au moment de la pose)
+function setRefAt(k, pt){
+  var old = AR.refs[k]; if(old){ old.tok = null; if(old.anchor){ try{ old.anchor.delete(); }catch(e){} } }
+  var r = { X: pt.X, Y: pt.Y, Z: pt.Z, base: { X: pt.X, Y: pt.Y, Z: pt.Z }, u: 0, w: null }, F = AR.lastFrame;
+  if(F){
+    var C = F.C, wx = pt.X - C[12], wy = pt.Y - C[13], wz = pt.Z - C[14], L = Math.hypot(wx, wy, wz);
+    if(L > 0.05) r.w = { X: wx / L, Y: wy / L, Z: wz / L };
+  }
+  AR.refs[k] = r; requestAnchor(k);
+  return r;
+}
+function alongRay(r){ r.X = r.base.X + r.u * (r.w ? r.w.X : 0); r.Y = r.base.Y + r.u * (r.w ? r.w.Y : 0); r.Z = r.base.Z + r.u * (r.w ? r.w.Z : 0); }
+function refineHeight(r, Y){
+  if(!r.w || r.w.Y > -0.25) return false;
+  var u = (Y - r.base.Y) / r.w.Y;
+  if(Math.abs(u) * Math.hypot(r.w.X, r.w.Z) > 0.4) return false;
+  if(Math.abs(u - r.u) * Math.abs(r.w.Y) < 0.003) return false;
+  r.u = u; alongRay(r); return true;
+}
+function refineRefs(){
+  var R = AR.reticle; if(!R || AR.drag) return false;
   var moved = false;
+  AR.refs.forEach(function(r){ if(r && Math.hypot(r.X - R.X, r.Z - R.Z) < 1 && refineHeight(r, R.Y)) moved = true; });
+  return moved;
+}
+function snapRef(){
+  var R = AR.reticle;
+  if(!R){ toast('Aucun sol détecté. Visez la croix du repère au sol.'); return; }
+  var best = -1, bd = 1.5;
+  AR.refs.forEach(function(r, k){ if(!r) return; var d = Math.hypot(r.X - R.X, r.Z - R.Z); if(d < bd){ bd = d; best = k; } });
+  if(best < 0){ toast('Visez la croix du repère A ou B (à moins de 1,5 m), puis touchez Caler A/B ici.'); return; }
+  setRefAt(best, R); refit();
+  toast('Repère ' + (best ? 'B' : 'A') + ' recalé sur le réticule (déplacé de ' + fmtDist(bd) + ').');
+}
+function updateAnchors(frame){
+  var canAnchor = typeof frame.createAnchor === 'function' && typeof XRRigidTransform !== 'undefined', moved = false;
   AR.refs.forEach(function(r){
-    if(!r) return;
+    if(!r || !canAnchor) return;
     if(r.wantAnchor){
       r.wantAnchor = false;
       var tok = r.tok = {};
       try{
-        frame.createAnchor(new XRRigidTransform({ x: r.X, y: r.Y, z: r.Z }), AR.ref).then(function(an){
+        frame.createAnchor(new XRRigidTransform({ x: r.base.X, y: r.base.Y, z: r.base.Z }), AR.ref).then(function(an){
           if(r.tok === tok && AR.session) r.anchor = an; else try{ an.delete(); }catch(e){}
         }).catch(function(){});
       }catch(e){}
@@ -964,8 +998,9 @@ function updateAnchors(frame){
     if(frame.trackedAnchors && !frame.trackedAnchors.has(r.anchor)) return;
     var p = frame.getPose(r.anchor.anchorSpace, AR.ref); if(!p) return;
     var m = p.transform.matrix;
-    if(Math.abs(m[12] - r.X) + Math.abs(m[13] - r.Y) + Math.abs(m[14] - r.Z) > 0.001){ r.X = m[12]; r.Y = m[13]; r.Z = m[14]; moved = true; }
+    if(Math.abs(m[12] - r.base.X) + Math.abs(m[13] - r.base.Y) + Math.abs(m[14] - r.base.Z) > 0.001){ r.base = { X: m[12], Y: m[13], Z: m[14] }; alongRay(r); moved = true; }
   });
+  if(refineRefs()) moved = true;
   if(moved) refit();
 }
 
@@ -1220,6 +1255,7 @@ $('#start').addEventListener('click', startAR);
 $('#bPlace').addEventListener('click', place);
 $('#bUndo').addEventListener('click', undo);
 $('#bRecal').addEventListener('click', recal);
+$('#bSnap').addEventListener('click', snapRef);
 $('#bCheck').addEventListener('click', startCheck);
 $('#bCkOk').addEventListener('click', checkValidate);
 $('#bCkNext').addEventListener('click', checkNext);
