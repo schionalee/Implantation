@@ -314,16 +314,16 @@ function parseDXFRaw(text){
   });
   return ents;
 }
-// Plan (x, y) vers sol (X, Z) : le plan vu de dessus, y vers l'avant, donne Z = -y. Rotation + translation, échelle 1.
+// Plan (x, y) vers sol (X, Z) : le plan vu de dessus, y vers l'avant, donne Z = -y.
+// Similitude : A et B tombent exactement sur les repères mesurés, les autres points sont étalonnés (rotation + échelle k = mesuré / plan).
 function fitTransform(pA, pB, wA, wB, mir){
   var sg = mir ? -1 : 1, a1 = sg * pA.x, b1 = -pA.y, a2 = sg * pB.x, b2 = -pB.y;
   var dpa = a2 - a1, dpb = b2 - b1, dwa = wB.X - wA.X, dwb = wB.Z - wA.Z;
   var lp = Math.hypot(dpa, dpb), lw = Math.hypot(dwa, dwb);
   if(lp < 1e-6 || lw < 1e-6) return null;
-  var phi = Math.atan2(dwb, dwa) - Math.atan2(dpb, dpa);
-  var c = Math.cos(phi), s = Math.sin(phi);
-  var mpa = (a1 + a2) / 2, mpb = (b1 + b2) / 2, mwa = (wA.X + wB.X) / 2, mwb = (wA.Z + wB.Z) / 2;
-  return { c: c, s: s, tx: mwa - (c * mpa - s * mpb), tz: mwb - (s * mpa + c * mpb), planDist: lp, measDist: lw, gap: Math.abs(lw - lp), m: !!mir };
+  var phi = Math.atan2(dwb, dwa) - Math.atan2(dpb, dpa), k = lw / lp;
+  var c = k * Math.cos(phi), s = k * Math.sin(phi);
+  return { c: c, s: s, tx: wA.X - (c * a1 - s * b1), tz: wA.Z - (s * a1 + c * b1), k: k, planDist: lp, measDist: lw, gap: Math.abs(lw - lp), m: !!mir };
 }
 function applyTransform(T, x, y){
   var a = T.m ? -x : x, b = -y;
@@ -740,9 +740,9 @@ function renderTrace(){
   updateDoneBtn();
   setText($('#hudMsg'), 'Suivez le point, marquez le sol sous le réticule.');
   setText($('#hudSub'), 'Touchez Fait une fois le point marqué : il passe en bleu.');
-  var g = $('#hudGap'), mm = Math.round(AR.T.gap * 1000);
-  g.hidden = false; g.className = AR.T.gap > 0.02 ? 'warn' : 'ok';
-  g.textContent = 'Écart de calage : ' + mm + ' mm sur ' + fmtDist(AR.T.planDist) + (AR.T.gap > 0.02 ? ' · précision réduite, utilisez Recaler.' : '') + (AR.mirror ? ' · plan inversé' : '') + (AR.rot ? ' · plan pivoté de ' + AR.rot * 90 + '°' : '');
+  var g = $('#hudGap'), mm = Math.round((AR.T.measDist - AR.T.planDist) * 1000), pc = Math.abs(AR.T.k - 1) * 100, big = pc > 3;
+  g.hidden = false; g.className = big ? 'warn' : 'ok';
+  g.textContent = 'Repères gardés tels que mesurés · A–B ' + fmtDist(AR.T.measDist) + ' au sol pour ' + fmtDist(AR.T.planDist) + ' sur le plan (' + (mm > 0 ? '+' : '') + mm + ' mm), points étalonnés à ' + (AR.T.k * 100).toFixed(1).replace('.', ',') + ' %' + (big ? ' · écart important : vérifiez l\'unité, l\'échelle ou les repères.' : '') + (AR.mirror ? ' · plan inversé' : '') + (AR.rot ? ' · plan pivoté de ' + AR.rot * 90 + '°' : '');
 }
 function toast(msg){
   var t = $('#toast'); t.textContent = msg; t.hidden = false;
