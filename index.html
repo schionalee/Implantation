@@ -351,7 +351,7 @@ function detectRed(data, w, h){
     var r = data[o], g = data[o + 1], b = data[o + 2];
     if(r >= 150 && g <= 110 && b <= 110 && r - g >= 70 && r - b >= 70) mask[i] = 1;
   }
-  var seen = new Uint8Array(n), stack = new Int32Array(n), out = [], maxSide = Math.max(w, h) * 0.04;
+  var seen = new Uint8Array(n), stack = new Int32Array(n), out = [], comps = [], maxSide = Math.max(w, h) * 0.04;
   for(var s = 0; s < n; s++){
     if(!mask[s] || seen[s]) continue;
     var sp = 0, area = 0, sx = 0, sy = 0, x0 = w, x1 = 0, y0 = h, y1 = 0;
@@ -369,10 +369,33 @@ function detectRed(data, w, h){
         }
       }
     }
-    var bw = x1 - x0 + 1, bh = y1 - y0 + 1, asp = bw / bh;
-    if(area < 5 || bw > maxSide || bh > maxSide || asp < 0.4 || asp > 2.5) continue;
-    out.push({ x: sx / area + 0.5, y: sy / area + 0.5, area: area });
+    if(area >= 3) comps.push({ area: area, sx: sx, sy: sy, x0: x0, x1: x1, y0: y0, y1: y1, n: 1 });
   }
+  // Un symbole de repère (cercle à quarts pleins et vides) donne plusieurs taches qui se touchent par un coin :
+  // on les regroupe en un seul point, au centre du symbole
+  var merged = true;
+  while(merged){
+    merged = false;
+    for(var i = 0; i < comps.length; i++){
+      var A = comps[i]; if(!A) continue;
+      for(var j = i + 1; j < comps.length; j++){
+        var B = comps[j]; if(!B) continue;
+        var pad = Math.max(2, 0.08 * Math.max(A.x1 - A.x0, A.y1 - A.y0, B.x1 - B.x0, B.y1 - B.y0));
+        if(B.x0 > A.x1 + pad || A.x0 > B.x1 + pad || B.y0 > A.y1 + pad || A.y0 > B.y1 + pad) continue;
+        A.area += B.area; A.sx += B.sx; A.sy += B.sy; A.n += B.n;
+        A.x0 = Math.min(A.x0, B.x0); A.x1 = Math.max(A.x1, B.x1); A.y0 = Math.min(A.y0, B.y0); A.y1 = Math.max(A.y1, B.y1);
+        comps[j] = null; merged = true;
+      }
+    }
+  }
+  comps.forEach(function(C){
+    if(!C) return;
+    var bw = C.x1 - C.x0 + 1, bh = C.y1 - C.y0 + 1, asp = bw / bh;
+    if(C.area < 5 || bw > maxSide || bh > maxSide || asp < 0.4 || asp > 2.5) return;
+    // plusieurs quarts : centre du cadre (le centre du cercle) ; une seule tache pleine : son barycentre
+    if(C.n > 1) out.push({ x: (C.x0 + C.x1 + 1) / 2, y: (C.y0 + C.y1 + 1) / 2, area: C.area });
+    else out.push({ x: C.sx / C.area + 0.5, y: C.sy / C.area + 0.5, area: C.area });
+  });
   return out;
 }
 // Points PDF (pt, origine en bas à gauche) triés de haut en bas puis de gauche à droite
