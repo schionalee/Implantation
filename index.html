@@ -178,7 +178,7 @@ input,select,textarea{font-size:16px}
       <li>Dans la caméra : visez le repère A, touchez Placer, faites de même pour B. Glissez un repère du doigt pour l'ajuster, puis Valider : les points apparaissent sur le sol.</li>
       <li>Touchez Fait une fois un point marqué au sol : il passe en bleu, ici comme sur le plan.</li>
       <li>Précision attendue : 1 à 3 cm. Une pièce bien éclairée avec des textures au sol aide le suivi.</li>
-      <li>Si un repère n'est plus sur sa croix, visez la croix avec le réticule et touchez Caler A/B ici : tout le plan se recale sur lui. Recaler recommence le calage complet.</li>
+      <li>Le suivi du téléphone dérive un peu en marchant (de l'ordre de 1 cm par mètre parcouru). Au fil de l'avancée, visez la marque d'un point déjà tracé ou d'un repère, et touchez Caler ici : les points voisins se recalent sur lui. Recaler recommence le calage complet.</li>
       <li>Pendant le contrôle, Pivoter 90° tourne le plan dans la caméra autour du repère A, par quart de tour.</li>
       <li>Contrôler : l'application choisit un troisième point hors de la ligne A–B. Posez le réticule dessus pour mesurer l'écart en cm, et savoir si le plan est inversé.</li>
     </ul>
@@ -234,7 +234,7 @@ input,select,textarea{font-size:16px}
       <button id="bNext" class="hb" type="button" aria-label="Point suivant">▶</button>
       <button id="bNear" class="hb" type="button" aria-pressed="false">Plus proche</button>
       <button id="bCheck" class="hb" type="button">Contrôler</button>
-      <button id="bSnap" class="hb" type="button">Caler A/B ici</button>
+      <button id="bSnap" class="hb" type="button">Caler ici</button>
       <button id="bRecal" class="hb" type="button">Recaler</button>
       <button class="hb bExit" type="button">Quitter</button>
     </div>
@@ -771,20 +771,21 @@ function renderCalage(){
   $('#drag').classList.toggle('on', AR.step > 0);
   AR.hint = '';
 }
+var TRACE_HINT = 'Touchez Fait une fois le point marqué : il passe en bleu. Si un point déjà tracé ou un repère n\'est plus sur sa marque, visez la marque et touchez Caler ici.';
 function renderTrace(){
   AR.phase = 'trace';
   $('#grpCalage').hidden = true; $('#grpTrace').hidden = false; $('#grpCheck').hidden = true; $('#guide').hidden = false;
   AR.drag = null;
   updateDoneBtn();
   setText($('#hudMsg'), 'Suivez le point, marquez le sol sous le réticule.');
-  setText($('#hudSub'), 'Touchez Fait une fois le point marqué : il passe en bleu. Si A ou B n\'est plus sur sa croix : visez la croix et touchez Caler A/B ici.');
+  setText($('#hudSub'), TRACE_HINT);
   $('#drag').classList.add('on');
   updateGapText();
 }
 function updateGapText(){
   var g = $('#hudGap'), mm = Math.round((AR.T.measDist - AR.T.planDist) * 1000), pc = Math.abs(AR.T.k - 1) * 100, big = pc > 3;
   g.hidden = false; g.className = big ? 'warn' : 'ok';
-  g.textContent = 'Repères gardés tels que mesurés · A–B ' + fmtDist(AR.T.measDist) + ' au sol pour ' + fmtDist(AR.T.planDist) + ' sur le plan (' + (mm > 0 ? '+' : '') + mm + ' mm), points étalonnés à ' + (AR.T.k * 100).toFixed(1).replace('.', ',') + ' %' + (big ? ' · écart important : vérifiez l\'unité, l\'échelle ou les repères.' : '') + (AR.mirror ? ' · plan inversé' : '') + (AR.rot ? ' · plan pivoté de ' + AR.rot * 90 + '°' : '');
+  g.textContent = 'Repères gardés tels que mesurés · A–B ' + fmtDist(AR.T.measDist) + ' au sol pour ' + fmtDist(AR.T.planDist) + ' sur le plan (' + (mm > 0 ? '+' : '') + mm + ' mm), points étalonnés à ' + (AR.T.k * 100).toFixed(1).replace('.', ',') + ' %' + (big ? ' · écart important : vérifiez l\'unité, l\'échelle ou les repères.' : '') + (AR.mirror ? ' · plan inversé' : '') + (AR.rot ? ' · plan pivoté de ' + AR.rot * 90 + '°' : '') + (AR.ctrl && AR.ctrl.length ? ' · ' + AR.ctrl.length + ' point(s) recalé(s)' : '');
 }
 function toast(msg){
   var t = $('#toast'); t.textContent = msg; t.hidden = false;
@@ -921,6 +922,22 @@ function rebuildWorld(){
   });
   AR.world[state.refA] = { X: a.X, Y: a.Y, Z: a.Z };
   if(!AR.rot) AR.world[state.refB] = { X: b.X, Y: b.Y, Z: b.Z };
+  // Correction locale de la dérive : chaque point recalé tire ses voisins de son écart mesuré,
+  // pondéré par l'inverse du carré de la distance ; A et B comptent comme écart nul.
+  var ctrl = (AR.ctrl || []).filter(function(c){ return AR.world[c.i]; });
+  if(!ctrl.length) return;
+  var base = AR.world.map(function(w){ return { X: w.X, Y: w.Y, Z: w.Z }; });
+  var res = ctrl.map(function(c){ var w = base[c.i]; return { X: c.r.X - w.X, Y: c.r.Y - w.Y, Z: c.r.Z - w.Z, P: w }; });
+  var zeros = [base[state.refA], AR.rot ? null : base[state.refB]].filter(Boolean);
+  AR.world = base.map(function(w){
+    var sw = 0, cx = 0, cy = 0, cz = 0;
+    zeros.forEach(function(z){ sw += 1 / (Math.pow(w.X - z.X, 2) + Math.pow(w.Z - z.Z, 2) + 0.01); });
+    res.forEach(function(r){ var k = 1 / (Math.pow(w.X - r.P.X, 2) + Math.pow(w.Z - r.P.Z, 2) + 0.01); sw += k; cx += k * r.X; cy += k * r.Y; cz += k * r.Z; });
+    return { X: w.X + cx / sw, Y: w.Y + cy / sw, Z: w.Z + cz / sw };
+  });
+  ctrl.forEach(function(c){ AR.world[c.i] = { X: c.r.X, Y: c.r.Y, Z: c.r.Z }; });
+  AR.world[state.refA] = { X: a.X, Y: a.Y, Z: a.Z };
+  if(!AR.rot) AR.world[state.refB] = { X: b.X, Y: b.Y, Z: b.Z };
 }
 // Recalcule le plan après un déplacement des repères (glisser, ou correction de dérive par les ancres)
 function refit(){
@@ -932,7 +949,7 @@ function refit(){
 }
 function fitMirror(mir){ var a = AR.refs[0], b = AR.refs[1]; return fitTransform(state.points[state.refA], state.points[state.refB], { X: a.X, Z: a.Z }, { X: b.X, Z: b.Z }, mir); }
 function rotatePlanAR(){
-  AR.rot = (AR.rot + 1) % 4; rebuildWorld();
+  AR.rot = (AR.rot + 1) % 4; clearCtrl(); rebuildWorld();
   toast(AR.rot ? 'Plan pivoté de ' + AR.rot * 90 + '° autour du repère A.' : 'Plan revenu à son orientation de calage.');
   if(AR.check && AR.check.M) evalCheck();
 }
@@ -966,33 +983,26 @@ function checkValidate(){
 function toggleMirror(){
   var T = fitMirror(!AR.mirror);
   if(!T) return;
-  AR.mirror = !AR.mirror; AR.T = T; rebuildWorld();
+  AR.mirror = !AR.mirror; AR.T = T; clearCtrl(); rebuildWorld();
   if(AR.check && AR.check.M) evalCheck();
 }
 
 /* ---------- Ancres : les repères suivent les corrections du suivi AR (dérive) ---------- */
-function dropRef(k){
-  var r = AR.refs[k]; AR.refs[k] = null; if(!r) return;
-  r.tok = null; if(r.anchor){ try{ r.anchor.delete(); }catch(e){} r.anchor = null; }
-}
-function dropRefs(){ dropRef(0); dropRef(1); }
-function requestAnchor(k){
-  var r = AR.refs[k]; if(!r) return;
-  if(r.anchor){ try{ r.anchor.delete(); }catch(e){} r.anchor = null; }
-  r.wantAnchor = true;
-}
-// Un repère est mémorisé avec le rayon de visée qui l'a posé : si le sol est mieux estimé ensuite,
-// on le fait glisser le long de ce rayon (il reste sous la croix vue au moment de la pose)
-function setRefAt(k, pt){
-  var old = AR.refs[k]; if(old){ old.tok = null; if(old.anchor){ try{ old.anchor.delete(); }catch(e){} } }
-  var r = { X: pt.X, Y: pt.Y, Z: pt.Z, base: { X: pt.X, Y: pt.Y, Z: pt.Z }, u: 0, w: null }, F = AR.lastFrame;
+// Une « marque » est une position mesurée au sol (repère A/B ou point recalé), accrochée à une ancre AR
+function newMark(pt){
+  var r = { X: pt.X, Y: pt.Y, Z: pt.Z, base: { X: pt.X, Y: pt.Y, Z: pt.Z }, u: 0, w: null, wantAnchor: true }, F = AR.lastFrame;
   if(F){
     var C = F.C, wx = pt.X - C[12], wy = pt.Y - C[13], wz = pt.Z - C[14], L = Math.hypot(wx, wy, wz);
     if(L > 0.05) r.w = { X: wx / L, Y: wy / L, Z: wz / L };
   }
-  AR.refs[k] = r; requestAnchor(k);
   return r;
 }
+function freeMark(r){ if(!r) return; r.tok = null; if(r.anchor){ try{ r.anchor.delete(); }catch(e){} r.anchor = null; } }
+function allMarks(){ return AR.refs.filter(Boolean).concat((AR.ctrl || []).map(function(c){ return c.r; })); }
+function clearCtrl(){ (AR.ctrl || []).forEach(function(c){ freeMark(c.r); }); AR.ctrl = []; }
+function dropRef(k){ freeMark(AR.refs[k]); AR.refs[k] = null; }
+function dropRefs(){ dropRef(0); dropRef(1); clearCtrl(); }
+function setRefAt(k, pt){ freeMark(AR.refs[k]); return AR.refs[k] = newMark(pt); }
 function alongRay(r){ r.X = r.base.X + r.u * (r.w ? r.w.X : 0); r.Y = r.base.Y + r.u * (r.w ? r.w.Y : 0); r.Z = r.base.Z + r.u * (r.w ? r.w.Z : 0); }
 function refineHeight(r, Y){
   if(!r.w || r.w.Y > -0.25) return false;
@@ -1004,22 +1014,30 @@ function refineHeight(r, Y){
 function refineRefs(){
   var R = AR.reticle; if(!R || AR.drag) return false;
   var moved = false;
-  AR.refs.forEach(function(r){ if(r && Math.hypot(r.X - R.X, r.Z - R.Z) < 1 && refineHeight(r, R.Y)) moved = true; });
+  allMarks().forEach(function(r){ if(Math.hypot(r.X - R.X, r.Z - R.Z) < 1 && refineHeight(r, R.Y)) moved = true; });
   return moved;
 }
-function snapRef(){
+// Caler ici : le réticule est posé sur un point connu au sol (repère A/B, ou point du plan déjà tracé ou retrouvé).
+// Ce point devient une marque de recalage ; les points voisins sont corrigés de la même dérive.
+function snapHere(){
   var R = AR.reticle;
-  if(!R){ toast('Aucun sol détecté. Visez la croix du repère au sol.'); return; }
-  var best = -1, bd = 1.5;
-  AR.refs.forEach(function(r, k){ if(!r) return; var d = Math.hypot(r.X - R.X, r.Z - R.Z); if(d < bd){ bd = d; best = k; } });
-  if(best < 0){ toast('Visez la croix du repère A ou B (à moins de 1,5 m), puis touchez Caler A/B ici.'); return; }
-  setRefAt(best, R); refit();
-  toast('Repère ' + (best ? 'B' : 'A') + ' recalé sur le réticule (déplacé de ' + fmtDist(bd) + ').');
+  if(!R){ toast('Aucun sol détecté. Visez la marque au sol.'); return; }
+  var best = -1, bd = 1.0;
+  AR.world.forEach(function(w, i){ var d = Math.hypot(w.X - R.X, w.Z - R.Z); if(d < bd){ bd = d; best = i; } });
+  if(best < 0){ toast('Aucun point du plan à moins d\'1 m du réticule. Visez la marque d\'un point connu, puis touchez Caler ici.'); return; }
+  var ab = best === state.refA ? 0 : best === state.refB && !AR.rot ? 1 : -1;
+  if(ab >= 0) setRefAt(ab, R);
+  else {
+    AR.ctrl = (AR.ctrl || []).filter(function(c){ if(c.i === best){ freeMark(c.r); return false; } return true; });
+    AR.ctrl.push({ i: best, r: newMark(R) });
+  }
+  refit();
+  toast((ab === 0 ? 'Repère A' : ab === 1 ? 'Repère B' : 'Point ' + lab(best)) + ' calé ici (corrigé de ' + fmtDist(bd) + '). Les points voisins suivent.');
 }
 function updateAnchors(frame){
   var canAnchor = typeof frame.createAnchor === 'function' && typeof XRRigidTransform !== 'undefined', moved = false;
-  AR.refs.forEach(function(r){
-    if(!r || !canAnchor) return;
+  allMarks().forEach(function(r){
+    if(!canAnchor) return;
     if(r.wantAnchor){
       r.wantAnchor = false;
       var tok = r.tok = {};
@@ -1082,6 +1100,11 @@ function onFrame(t, frame){
       var nd = doneCount();
       setText($('#gCoord'), 'x ' + fm(rr.x) + ' ; y ' + fm(rr.y) + ' m · ' + (AR.target + 1) + '/' + state.points.length + (isDone(AR.target) ? ' · fait' : '') + (nd ? ' · ' + nd + ' fait' + (nd > 1 ? 's' : '') : ''));
       $('#guide').classList.toggle('on', dist < 0.03);
+      if(AR.phase === 'trace'){
+        // distance au point calé le plus proche : au-delà de 8 m, la dérive du suivi devient visible
+        var md = Infinity; allMarks().forEach(function(r){ md = Math.min(md, Math.hypot(r.X - base.X, r.Z - base.Z)); });
+        setText($('#hudSub'), md > 8 ? 'Vous êtes à ' + fmtDist(md) + ' du dernier point calé : visez la marque d\'un point déjà tracé et touchez Caler ici.' : TRACE_HINT);
+      }
     }
   }
   var vi = 0;
@@ -1301,7 +1324,7 @@ $('#start').addEventListener('click', startAR);
 $('#bPlace').addEventListener('click', place);
 $('#bUndo').addEventListener('click', undo);
 $('#bRecal').addEventListener('click', recal);
-$('#bSnap').addEventListener('click', snapRef);
+$('#bSnap').addEventListener('click', snapHere);
 $('#bCheck').addEventListener('click', startCheck);
 $('#bCkOk').addEventListener('click', checkValidate);
 $('#bCkNext').addEventListener('click', checkNext);
